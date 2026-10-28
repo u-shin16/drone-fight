@@ -21,6 +21,12 @@ class ArenaTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             arena.normalize(bad)
 
+    def test_rejects_wrong_numbered_pattern(self):
+        bad = {**self.layout, "preset": None, "pads": dict(self.layout["pads"])}
+        bad["pads"]["4"], bad["pads"]["6"] = bad["pads"]["6"], bad["pads"]["4"]
+        with self.assertRaisesRegex(ValueError, "左右の並び"):
+            arena.normalize(bad)
+
 
 if __name__ == "__main__":
     unittest.main()

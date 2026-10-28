@@ -47,6 +47,18 @@ def normalize(value: dict) -> dict:
         for j in range(i + 1, 9):
             if math.dist(pads[str(i)], pads[str(j)]) < 20:
                 raise ValueError(f"パッド{i}と{j}が近すぎます")
+    # The user-defined pattern is 2 / 1 3 / 4 5 6 / 7 8. Distances may
+    # vary, but the numbered rows and left-to-right order must stay intact.
+    if not (pads["1"][0] < pads["3"][0]
+            and pads["4"][0] < pads["5"][0] < pads["6"][0]
+            and pads["7"][0] < pads["8"][0]):
+        raise ValueError("パッド番号の左右の並びを確認してください")
+    row_y = [pads["2"][1],
+             (pads["1"][1] + pads["3"][1])/2,
+             sum(pads[str(i)][1] for i in (4, 5, 6))/3,
+             (pads["7"][1] + pads["8"][1])/2]
+    if not all(row_y[i] + 15 < row_y[i+1] for i in range(3)):
+        raise ValueError("パッド番号の奥から手前の並びを確認してください")
 
     field = point(value.get("field"), "飛行範囲", 4)
     x0, x1, y0, y1 = field
