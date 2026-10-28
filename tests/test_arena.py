@@ -5,7 +5,7 @@ import arena
 
 class ArenaTest(unittest.TestCase):
     def setUp(self):
-        self.layout = arena.normalize({"preset": "diamond8", "spacing": 60})
+        self.layout = arena.normalize({"preset": "rows8", "spacing": 60})
 
     def test_eight_pad_layout_has_shared_start_pads(self):
         self.assertEqual(set(self.layout["pads"]), set("12345678"))
@@ -17,7 +17,8 @@ class ArenaTest(unittest.TestCase):
         bad = {**self.layout, "preset": None, "pads": {k: v for k, v in self.layout["pads"].items() if k != "8"}}
         with self.assertRaises(ValueError):
             arena.normalize(bad)
-        bad = {**self.layout, "preset": None, "field": [-100, 100, -100, 100]}
+        # A boundary that leaves pads 1-3 and 7-8 outside the flying area.
+        bad = {**self.layout, "preset": None, "field": [-120, 120, -40, 40]}
         with self.assertRaises(ValueError):
             arena.normalize(bad)
 

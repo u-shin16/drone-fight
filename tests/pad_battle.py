@@ -11,13 +11,13 @@ APP = Path(__file__).resolve().parents[1]
 PY = sys.executable
 mode_a, mode_b, seconds, pads = sys.argv[1], sys.argv[2], float(sys.argv[3]), sys.argv[4]
 if "irregular" in sys.argv[5:]:
-    layout = arena.normalize({"pads": {"1": [-90, -50], "2": [-10, -120], "3": [70, -60],
+    layout = arena.normalize({"pads": {"1": [-90, -70], "2": [-10, -75], "3": [70, -70],
                                        "4": [-160, 20], "5": [-10, 15], "6": [155, 35],
                                        "7": [-65, 110], "8": [100, 120]},
                               "field": [-220, 210, -160, 160],
                               "starts": {"A": [-160, 20, 0], "B": [155, 35, 180]}})
 else:
-    layout = arena.normalize({"preset": "diamond8", "spacing": 60})
+    layout = arena.normalize({"preset": "rows8", "spacing": 60})
 (SP / "layout.json").write_text(json.dumps(layout))
 procs = []
 for i, (tp, stp, port) in enumerate(((9021, 9121, 5071), (9022, 9122, 5072))):

@@ -248,40 +248,93 @@ function droneState(b) {
 }
 
 // ---- the pad arena map (screen right = the rockets' direction, A to B) ----
-function drawArena(s, opponent) {
-  const a = s.arena;
-  if (!a) {
-    $("arena-map").textContent = "8枚のパッドと飛行範囲を設定してください";
-    return;
-  }
-  const [xMin, xMax, yMin, yMax] = a.field;
+// pads: {id: [x, y]}; drones: [{pos: {x, y, heading, pad}, cls, label}]
+function drawMap(el, field, pads, starts, drones) {
+  const [xMin, xMax, yMin, yMax] = field;
   const scale = Math.min(1.6, 500 / Math.max(xMax - xMin, yMax - yMin));
   const W = (xMax - xMin) * scale, H = (yMax - yMin) * scale;
   const sx = (x) => (x - xMin) * scale, sy = (y) => (y - yMin) * scale;
   const pad = 19.5 * scale;
   let svg = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="フィールドの地図">`;
   svg += `<rect x="0" y="0" width="${W}" height="${H}" class="field"/>`;
-  for (const [id, [x, y]] of Object.entries(a.pads)) {
+  for (const [id, xy] of Object.entries(pads)) {
+    if (!xy) continue;
+    const [x, y] = xy;
     svg += `<rect x="${sx(x) - pad / 2}" y="${sy(y) - pad / 2}" width="${pad}" height="${pad}" rx="4" class="pad"/>`;
     svg += `<text x="${sx(x)}" y="${sy(y) + 5}" class="pad-id">${id}</text>`;
     svg += `<text x="${sx(x) + pad / 2 + 8}" y="${sy(y) + 4}" class="rocket">▶</text>`;
   }
-  for (const [side, [x, y]] of Object.entries(a.starts)) {
+  for (const [side, [x, y]] of Object.entries(starts || {})) {
     svg += `<text x="${sx(x)}" y="${sy(y) + (side === "A" ? 24 : -14)}" class="side">${side}側</text>`;
   }
-  const drone = (pos, cls, label) => {
-    if (!pos) return "";
-    const rad = (pos.heading || 0) * Math.PI / 180;
-    const hx = sx(pos.x + Math.cos(rad) * 18), hy = sy(pos.y + Math.sin(rad) * 18);
-    return `<line x1="${sx(pos.x)}" y1="${sy(pos.y)}" x2="${hx}" y2="${hy}" class="${cls} heading"/>` +
-      `<circle cx="${sx(pos.x)}" cy="${sy(pos.y)}" r="9" class="${cls}"/>` +
-      `<text x="${sx(pos.x)}" y="${sy(pos.y) - 13}" class="label">${label}${pos.pad ? "（パッド" + pos.pad + "）" : ""}</text>`;
-  };
+  for (const d of drones) {
+    if (!d.pos) continue;
+    const rad = (d.pos.heading || 0) * Math.PI / 180;
+    const hx = sx(d.pos.x + Math.cos(rad) * 18), hy = sy(d.pos.y + Math.sin(rad) * 18);
+    svg += `<line x1="${sx(d.pos.x)}" y1="${sy(d.pos.y)}" x2="${hx}" y2="${hy}" class="${d.cls} heading"/>` +
+      `<circle cx="${sx(d.pos.x)}" cy="${sy(d.pos.y)}" r="9" class="${d.cls}"/>` +
+      `<text x="${sx(d.pos.x)}" y="${sy(d.pos.y) - 13}" class="label">${d.label}${d.pos.pad ? "（パッド" + d.pos.pad + "）" : ""}</text>`;
+  }
+  el.innerHTML = svg + "</svg>";
+}
+
+function drawArena(s, opponent) {
+  const a = s.arena;
+  if (!a) {
+    $("arena-map").textContent = "まだ地図がありません。「フィールド」画面でスキャンしてください";
+    return;
+  }
   const flying = (b) => b && ["starting", "flying"].includes(b.phase);
-  svg += drone(flying(opponent && opponent.battle) ? opponent.battle.pos : null, "op", "相手");
-  svg += drone(flying(s.me) ? s.me.pos : null, "me", "あなた");
-  svg += "</svg>";
-  $("arena-map").innerHTML = svg;
+  drawMap($("arena-map"), a.field, a.pads, a.starts, [
+    { pos: flying(opponent && opponent.battle) ? opponent.battle.pos : null, cls: "op", label: "相手" },
+    { pos: flying(s.me) ? s.me.pos : null, cls: "me", label: "あなた" },
+  ]);
+}
+
+function arenaSyncText(s, opponent) {
+  if (!s.arena) return "地図がありません。「フィールド」画面でスキャンするまで準備OKに進めません。";
+  if (!opponent) return "このPCに地図を保存済みです。マッチすると相手と同じ地図にそろえます。";
+  return opponent.arena_hash === s.arena_hash ? "両PCの地図は一致しています。"
+    : "相手PCと地図をそろえています。一致するまで準備OKに進めません。";
+}
+
+// ---- フィールド page: the scan ----
+const PHASE_TITLE = { idle: "まだスキャンしていません", running: "スキャン中…", done: "スキャン完了", failed: "スキャン失敗" };
+
+function renderField(s) {
+  const sc = s.arena_scan;
+  const running = sc.phase === "running";
+  $("scan-start").hidden = running;
+  $("scan-stop").hidden = !running;
+  for (const id of ["b-back", "b-front", "b-far", "b-near"]) $(id).disabled = running;
+  $("scan-title").textContent = sc.phase === "idle" && s.arena ? "保存済みの地図" : PHASE_TITLE[sc.phase];
+  $("scan-title").className = sc.phase === "failed" ? "error" : sc.phase === "done" ? "ok-text" : "";
+  $("scan-progress").textContent = sc.phase === "idle" ? "" :
+    (running ? `止まって読んだ場所 ${sc.progress[0]} / ${sc.progress[1]} ・ ${sc.elapsed}秒（${sc.time_limit}秒まで）` : sc.message);
+  $("scan-log").textContent = sc.log.join("\n");
+  $("scan-sync").textContent = arenaSyncText(s, s.matching ? s.peers[0] : null);
+
+  const badges = $("pad-badges");
+  badges.innerHTML = "";
+  const showScan = sc.phase !== "idle";
+  for (let k = 1; k <= 8; k++) {
+    const p = sc.pads[k];
+    const b = document.createElement("span");
+    const seen = showScan ? p.seen : (s.arena ? 1 : 0);
+    b.className = "pad-badge" + (seen >= 2 || (!showScan && seen) ? " on" : seen ? " some" : "");
+    b.textContent = k + (showScan ? "：" + p.seen + "回" + (p.seen ? "・ズレ" + p.spread + "cm" : "") : "");
+    badges.appendChild(b);
+  }
+  if (showScan && sc.field) {
+    const pads = {};
+    for (let k = 1; k <= 8; k++) pads[k] = sc.pads[k].center;
+    drawMap($("scan-map"), sc.field, pads, null,
+      [{ pos: running ? { x: sc.pose[0], y: sc.pose[1], heading: 0 } : null, cls: "me", label: "あなた" }]);
+  } else if (s.arena) {
+    drawMap($("scan-map"), s.arena.field, s.arena.pads, s.arena.starts, []);
+  } else {
+    $("scan-map").textContent = "まだ地図がありません";
+  }
 }
 
 function renderBattle(s) {
@@ -289,13 +342,8 @@ function renderBattle(s) {
   $("no-match").hidden = !!opponent;
   $("room").hidden = !opponent;
   $("room-part2").hidden = !opponent;
-  $("arena-setup").hidden = !!s.start_at;
-  const peerOwnsMap = !!opponent && s.role === "B" && !!opponent.arena_hash;
-  $("scan-photo").disabled = s.ready || !!s.start_at || peerOwnsMap;
-  $("save-arena").disabled = s.ready || !!s.start_at || peerOwnsMap || !window.arenaScan.ready();
-  $("arena-sync").textContent = !s.arena ? "配置未登録。準備OKに進めません。" : !opponent ?
-    "このPCに配置を保存済みです。相手とマッチすると地図を共有します。" :
-    (opponent.arena_hash === s.arena_hash ? "両PCの配置は一致しています。" : "相手PCと配置を同期しています。準備OKに進めません。");
+  $("arena-status").hidden = !!s.start_at;
+  $("arena-sync").textContent = arenaSyncText(s, opponent);
   if (!opponent) return;
   setPlayerCard("me", s.player, s.my_drone, s.ready);
   setPlayerCard("op", opponent.player, opponent.drone, opponent.ready);
@@ -370,6 +418,7 @@ async function refresh() {
   if (page === "drones") renderDrones(s);
   if (page === "peers") renderPeers(s);
   if (page === "battle") renderBattle(s);
+  if (page === "field") renderField(s);
 }
 
 if (page === "drones") {
@@ -401,16 +450,29 @@ if (page === "peers") {
     refresh();
   });
 }
-if (page === "battle") {
-  $("save-arena").addEventListener("click", async () => {
-    let value;
-    try { value = window.arenaScan.layout(); }
-    catch (e) { $("arena-msg").textContent = e.message; return; }
-    const r = await post("/api/arena", value);
-    $("arena-msg").className = r.ok ? "msg ok-text" : "msg error";
-    $("arena-msg").textContent = r.ok ? "保存しました。相手へ送信します。" : r.message;
+if (page === "field") {
+  const stopScan = () => post("/api/arena/scan/stop").then(refresh);
+  $("scan-stop").addEventListener("click", stopScan);
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("scan-stop").hidden) stopScan(); });
+  $("scan-start").addEventListener("click", async () => {
+    const value = (id) => $(id).value === "" ? null : Number($(id).value);
+    const body = { back: value("b-back"), front: value("b-front"), far: value("b-far"), near: value("b-near") };
+    if (Object.values(body).some((v) => v === null)) {
+      $("scan-msg").className = "msg error";
+      $("scan-msg").textContent = "4つの距離を全部入れてください（パッド4から測ったcm）";
+      return;
+    }
+    if (!confirm("パッド4の中心から離陸してスキャンします。周りに人や物がないか確認しましたか？")) return;
+    $("scan-msg").className = "msg";
+    $("scan-msg").textContent = "離陸します…";
+    const r = await post("/api/arena/scan", body);
+    $("scan-msg").className = r.ok ? "msg" : "msg error";
+    $("scan-msg").textContent = r.ok ? "" : r.message;
     refresh();
   });
+  setInterval(refresh, 400);
+}
+if (page === "battle") {
   for (const b of document.querySelectorAll(".segment button")) {
     b.addEventListener("click", () => showView(b.dataset.view));
   }

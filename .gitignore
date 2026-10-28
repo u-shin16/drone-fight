@@ -7,3 +7,6 @@ drones.json
 arena.json
 # imported battle files (examples live in examples/)
 plans/
+# local hand-off notes (they hold this LAN's addresses)
+CLAUDE_HANDOFF.md
+WORK_STATUS.md

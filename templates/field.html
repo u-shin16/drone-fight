@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h2>フィールドをスキャンする（最初に1回）</h2>
+  <p style="margin-top:0">自分のドローンがパッドの上を飛んで、8枚の位置を実際に測って地図を作ります。写真はいりません。</p>
+  <ol class="steps-list">
+    <li>パッドを<b>奥から「1 2 3 ／ 4 5 6 ／ 7 8」</b>の並びで、<b>数字の面を上</b>にして床に置く。間隔は自由。</li>
+    <li><b>ロケットの絵を8枚とも同じ向き</b>にそろえる（パッド4から6の方へ向く向き）。パッド4と6は<b>100cm以上</b>離す。</li>
+    <li>自分のドローンを<b>パッド4の中心</b>に、<b>ロケットと同じ向き</b>で置く。相手のドローンはどかしておく。</li>
+    <li>パッド4から測って、<b>壁・人・家具にぶつからずに飛べる距離</b>を下に入れる。この長方形の外には出ません。</li>
+  </ol>
+  <div class="bounds">
+    <label>後ろ（ロケットと反対）<input id="b-back" type="number" min="50" max="600" step="10" placeholder="cm"></label>
+    <label>前（ロケットの向き）<input id="b-front" type="number" min="50" max="600" step="10" placeholder="cm"></label>
+    <label>奥（パッド1〜3の側）<input id="b-far" type="number" min="50" max="600" step="10" placeholder="cm"></label>
+    <label>手前（パッド7・8の側）<input id="b-near" type="number" min="50" max="600" step="10" placeholder="cm"></label>
+  </div>
+  <div class="row" style="margin-top:14px">
+    <button id="scan-start" class="big-button">スキャン開始（離陸します）</button>
+    <button id="scan-stop" class="stop big-button" hidden>停止して着陸</button>
+    <span class="msg" id="scan-msg"></span>
+  </div>
+  <p class="muted" style="font-size:13px;margin:10px 0 0">高さ100cm・秒速40cmで、範囲の中を往復しながらパッドを読みます（広さに合わせて最大6分）。8枚とも2回以上見えて位置がそろい、最後にパッド4へ戻ったときのズレが30cm以内のときだけ保存します。どれか1つでもだめなら着陸して保存しません。電池50%以上が必要です。Escキーでも停止して着陸します。</p>
+</section>
+
+<section class="card arena">
+  <div class="arena-map" id="scan-map"></div>
+  <div class="arena-help">
+    <h2 id="scan-title">まだスキャンしていません</h2>
+    <p id="scan-progress" class="muted"></p>
+    <div class="pad-badges" id="pad-badges"></div>
+    <p id="scan-sync" class="muted"></p>
+    <details>
+      <summary class="muted">スキャンの記録</summary>
+      <pre class="mono muted" id="scan-log" style="white-space:pre-wrap;margin:8px 0 0"></pre>
+    </details>
+  </div>
+</section>
+{% endblock %}

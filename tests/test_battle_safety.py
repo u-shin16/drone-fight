@@ -6,7 +6,7 @@ import battle
 
 class BattleSafetyTest(unittest.TestCase):
     def setUp(self):
-        battle.configure_arena(arena.normalize({"preset": "diamond8", "spacing": 60}))
+        battle.configure_arena(arena.normalize({"preset": "rows8", "spacing": 60}))
 
     def test_cancel_before_takeoff_does_not_open_a_tello_socket(self):
         runner = battle.BattleRunner.__new__(battle.BattleRunner)

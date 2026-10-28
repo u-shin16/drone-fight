@@ -35,20 +35,16 @@
     <div class="arena-help">
       <h2>フィールド（ミッションパッド）</h2>
       <p id="role-line" class="role-line"></p>
-      <p class="muted">写真の8枚を番号1〜8で登録します。ロケットを全部同じ向きにそろえ、A機はその向き、B機は反対向きに置いてください。</p>
-      <p class="muted">地図の座標は実測値です。パッドを検出できた間は位置を補正し、見えない間は移動命令から推定します。飛行範囲は壁・人・家具から十分離した内側に設定してください。</p>
+      <p class="muted">地図は「フィールド」画面でドローンが実際に飛んで測ったものです。A機はパッド4の中心にロケットの向きで、B機はパッド6の中心に反対向きで置いてください。</p>
+      <p class="muted">飛んでいる間、パッドが見えると位置を直し、見えない間は移動命令から推定します。地図の外枠が飛行範囲です。</p>
     </div>
   </section>
 </div>
-  <section class="card" id="arena-setup">
-    <h2>初回フィールドスキャン</h2>
-    <p class="muted">パッドの間隔や部屋の中の位置は自由です。全8枚と安全な空き範囲が写る写真を選び、画面の案内どおりに点を押してください。ロケットはすべて同じ向きにそろえ、写真では右向きに見えるよう撮ります。</p>
-    <p class="muted">最初に任意の1枚の黒いパッドの四隅を「左上→右上→右下→左下」の順に押します。その一辺を20cmとして縮尺を求めます。続いて番号1〜8の中心、ロケットの向きと平行な飛行可能長方形の対角2点、遠くの別パッドの四隅を指定します。赤枠が飛行範囲です。A機はパッド4、B機はパッド6の中心から離陸します。</p>
-    <div class="row"><input id="scan-photo" type="file" accept="image/*"><button id="scan-back" class="ghost">1点戻す</button><button id="scan-clear" class="ghost">やり直す</button><button id="scan-zoom-in" class="ghost">拡大＋</button><button id="scan-zoom-out" class="ghost">縮小−</button></div>
-    <p id="scan-instruction" class="role-line">写真を選んでください</p>
-    <div class="scan-viewport"><canvas id="scan-canvas" hidden></canvas></div>
-    <div class="row"><button id="save-arena" disabled>スキャンを保存</button><span id="arena-msg" class="msg"></span></div>
-    <p id="arena-sync" class="muted"></p>
+  <section class="card" id="arena-status">
+    <div class="row" style="justify-content:space-between">
+      <p id="arena-sync" class="muted" style="margin:0"></p>
+      <a class="button ghost" href="{{ url_for('field_page') }}">フィールドをスキャン →</a>
+    </div>
   </section>
 
 <div id="room-part2" hidden>

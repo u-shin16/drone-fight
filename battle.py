@@ -808,10 +808,15 @@ class StateMonitor:
                     return int(fields[key])
                 except (KeyError, ValueError):
                     return None
+            try:  # mpry = pitch,roll,yaw against the pad's axes, while a pad is in view
+                pad_yaw = int(fields.get("mpry", "").split(",")[2])
+            except (IndexError, ValueError):
+                pad_yaw = None
             self.latest[source[0]] = {"h": number("h"), "tof": number("tof"),
                                       "bat": fields.get("bat"), "at": time.monotonic(),
                                       # mission pad: id (-1 = none) and our spot over it (cm)
-                                      "mid": number("mid"), "x": number("x"), "y": number("y")}
+                                      "mid": number("mid"), "x": number("x"), "y": number("y"),
+                                      "pad_yaw": pad_yaw}
 
     def battery(self, ip: str | None, max_age: float = 3) -> str | None:
         reading = self.latest.get(ip or "")

@@ -14,6 +14,11 @@ PADS = {1: (-s, -s/2), 2: (0, -3*s/2), 3: (s, -s/2),
 if len(sys.argv) > 9:
     PADS = {int(k): tuple(v) for k, v in json.load(open(sys.argv[9]))["pads"].items()}
 z = 0.0; flying = False; mon = False; speed = 100; takeoff_time = 0.0
+import os
+# How sloppy each move is: distance off by up to MOVE_ERROR, direction by up to ANGLE_ERROR degrees.
+MOVE_ERROR = float(os.environ.get("FAKE_MOVE_ERROR", 0.2))
+ANGLE_ERROR = float(os.environ.get("FAKE_ANGLE_ERROR", 10))
+YAW_DRIFT = float(os.environ.get("FAKE_YAW_DRIFT", 0))  # degrees the body turns by itself per move
 rng = random.Random(port)
 srv = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); srv.bind(("127.0.0.1", port))
 
@@ -26,7 +31,9 @@ def save():
 def move_body(ahead, right, up, duration):
     """Like a real drone: the distance is off by up to 20 % and the direction by up to 10 degrees."""
     global x, y, z
-    k = rng.uniform(0.8, 1.2); err = math.radians(heading + rng.uniform(-10, 10))
+    global heading
+    k = rng.uniform(1 - MOVE_ERROR, 1 + MOVE_ERROR); err = math.radians(heading + rng.uniform(-ANGLE_ERROR, ANGLE_ERROR))
+    heading += YAW_DRIFT
     x0, y0, z0 = x, y, z
     dx = k * (ahead * math.cos(err) - right * math.sin(err))
     dy = k * (ahead * math.sin(err) + right * math.cos(err))
@@ -45,14 +52,16 @@ def stream():
         if flying and pads_mode == "state-drop" and since_takeoff > 2:
             time.sleep(0.05)
             continue
-        mid, px, py = -1, 0, 0
+        mid, px, py, mpry = -1, 0, 0, "0,0,0"
         use_pads = pads_mode in ("1", "state-drop") or (pads_mode == "drop" and since_takeoff < 2)
         if flying and mon and use_pads and 30 <= z <= 120:
             k, (cx, cy) = min(PADS.items(), key=lambda kv: math.hypot(x - kv[1][0], y - kv[1][1]))
-            if math.hypot(x - cx, y - cy) <= 50:
+            # The downward camera sees about ±0.42 x height around the drone.
+            if math.hypot(x - cx, y - cy) <= 0.42 * z:
                 mid, px, py = k, round(x - cx), round(-(y - cy))  # pad y points left
+                mpry = f"0,0,{round((heading + 180) % 360 - 180)}"
         h = round(z) if flying else 0
-        st.sendto(f"mid:{mid};x:{px};y:{py};z:{h};h:{h};tof:{h + 5};bat:77;".encode(), ("127.0.0.1", state_port))
+        st.sendto(f"mid:{mid};x:{px};y:{py};z:{h};mpry:{mpry};h:{h};tof:{h + 5};bat:77;".encode(), ("127.0.0.1", state_port))
         save(); time.sleep(0.05)
 threading.Thread(target=stream, daemon=True).start()
 

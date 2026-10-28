@@ -15,21 +15,21 @@ def normalize(value: dict) -> dict:
     if not isinstance(value, dict):
         raise ValueError("フィールド設定がありません")
     if value.get("preset") is not None:
-        if value.get("preset") != "diamond8":
+        if value.get("preset") != "rows8":
             raise ValueError("配置の種類が不正です")
         spacing = value.get("spacing")
         if isinstance(spacing, bool) or not isinstance(spacing, (int, float)) or not math.isfinite(spacing) or not 50 <= spacing <= 120:
             raise ValueError("パッド間隔は50〜120cmにしてください")
         spacing = round(float(spacing), 1)
         s = spacing
-        # Seen from above: 2 / 1 3 / 4 5 6 / 7 8.
+        # Seen from above: 1 2 3 / 4 5 6 / 7 8.
         # X follows the rocket arrows (A -> B); Y points across the rows.
-        value = {"pads": {"1": [-s, -s/2], "2": [0, -3*s/2], "3": [s, -s/2],
-                          "4": [-2*s, s/2], "5": [0, s/2], "6": [2*s, s/2],
-                          "7": [-s, 3*s/2], "8": [s, 3*s/2]},
-                 "field": [-3*s, 3*s, -2*s, 2*s],
-                 "starts": {"A": [-2*s, s/2, 0], "B": [2*s, s/2, 180]},
-                 "preset": "diamond8", "spacing": spacing}
+        value = {"pads": {"1": [-s, -s], "2": [0, -s], "3": [s, -s],
+                          "4": [-s, 0], "5": [0, 0], "6": [s, 0],
+                          "7": [-s/2, s], "8": [s/2, s]},
+                 "field": [-2*s, 2*s, -2*s, 2*s],
+                 "starts": {"A": [-s, 0, 0], "B": [s, 0, 180]},
+                 "preset": "rows8", "spacing": spacing}
 
     def point(raw, label, length=2):
         if not isinstance(raw, (list, tuple)) or len(raw) != length:
@@ -47,17 +47,16 @@ def normalize(value: dict) -> dict:
         for j in range(i + 1, 9):
             if math.dist(pads[str(i)], pads[str(j)]) < 20:
                 raise ValueError(f"パッド{i}と{j}が近すぎます")
-    # The user-defined pattern is 2 / 1 3 / 4 5 6 / 7 8. Distances may
+    # The user-defined pattern is 1 2 3 / 4 5 6 / 7 8. Distances may
     # vary, but the numbered rows and left-to-right order must stay intact.
-    if not (pads["1"][0] < pads["3"][0]
+    if not (pads["1"][0] < pads["2"][0] < pads["3"][0]
             and pads["4"][0] < pads["5"][0] < pads["6"][0]
             and pads["7"][0] < pads["8"][0]):
         raise ValueError("パッド番号の左右の並びを確認してください")
-    row_y = [pads["2"][1],
-             (pads["1"][1] + pads["3"][1])/2,
-             sum(pads[str(i)][1] for i in (4, 5, 6))/3,
-             (pads["7"][1] + pads["8"][1])/2]
-    if not all(row_y[i] + 15 < row_y[i+1] for i in range(3)):
+    if not (max(pads[str(i)][1] for i in (1, 2, 3)) + 15 <
+            min(pads[str(i)][1] for i in (4, 5, 6)) and
+            max(pads[str(i)][1] for i in (4, 5, 6)) + 15 <
+            min(pads[str(i)][1] for i in (7, 8))):
         raise ValueError("パッド番号の奥から手前の並びを確認してください")
 
     field = point(value.get("field"), "飛行範囲", 4)
@@ -83,8 +82,11 @@ def normalize(value: dict) -> dict:
         if math.dist(starts[side][:2], pads[pad]) > 10:
             raise ValueError(f"{side}の開始位置はパッド{pad}の中心にしてください")
     result = {"pads": pads, "field": field, "starts": starts}
-    if value.get("preset") == "diamond8":
-        result.update(preset="diamond8", spacing=value["spacing"])
+    scanned_at = value.get("scanned_at")
+    if isinstance(scanned_at, (int, float)) and not isinstance(scanned_at, bool) and math.isfinite(scanned_at):
+        result["scanned_at"] = round(float(scanned_at), 3)
+    if value.get("preset") == "rows8":
+        result.update(preset="rows8", spacing=value["spacing"])
     return result
 
 

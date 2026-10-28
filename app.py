@@ -16,6 +16,7 @@ from pathlib import Path
 from flask import Flask, abort, jsonify, render_template, request
 
 import battle
+import scan
 import arena
 import plans
 import tello_net
@@ -40,6 +41,7 @@ def opponent_height() -> int | None:
     return ((others[0].get("battle") or {}).get("height")) if others else None
 
 
+scanner = scan.ArenaScanner(runner.monitor, runner.tello_port)
 runner.opponent_height = opponent_height
 
 
@@ -190,6 +192,7 @@ def api_state():
         result=state["result"],
         role=my_role(),
         arena=arena_layout,
+        arena_scan=scanner.status(),
         arena_hash=arena.fingerprint(arena_layout),
         me=runner.details(),
         choices=battle.choices(),
@@ -293,20 +296,40 @@ def battle_page():
     return render_template("battle.html", page="battle")
 
 
-@app.post("/api/arena")
-def api_arena():
-    """Save measured pad and boundary coordinates before either player is ready."""
+@app.get("/field")
+def field_page():
+    return render_template("field.html", page="field")
+
+
+def save_scanned_arena(layout: dict) -> None:
+    """A finished scan: store it, fly battles on it and offer it to the opponent."""
     global arena_layout
+    arena_layout = arena.save(layout)
+    battle.configure_arena(arena_layout)
+    peers.announce()
+
+
+@app.post("/api/arena/scan")
+def api_arena_scan():
+    """Fly our own drone over the pads (from pad 4) inside the safe rectangle the player gave."""
     if state["ready"] or state["start_at"] or runner.phase in ("starting", "flying"):
-        return jsonify(ok=False, message="準備OKを取り消してからフィールドを変更してください")
+        return jsonify(ok=False, message="準備OK・バトル中はスキャンできません")
+    ip = (my_drone() or {}).get("ip")
+    if not ip:
+        return jsonify(ok=False, message="自分のドローンがわかりません。「1. ドローンを探す」で自分の機体にしてください")
+    body = request.get_json()
     try:
-        layout = arena.save(request.get_json())
+        field = scan.boundary(*(body.get(k) for k in ("back", "front", "far", "near")))
     except (ValueError, TypeError) as exc:
         return jsonify(ok=False, message=str(exc))
-    arena_layout = layout
-    battle.configure_arena(layout)
-    peers.announce()
-    return jsonify(ok=True, hash=arena.fingerprint(layout))
+    message = scanner.start(ip, field, save_scanned_arena)
+    return jsonify(ok=message is None, message=message)
+
+
+@app.post("/api/arena/scan/stop")
+def api_arena_scan_stop():
+    scanner.stop()
+    return jsonify(ok=True)
 
 
 @app.post("/api/plan")
@@ -345,6 +368,8 @@ def api_ready():
         return jsonify(ok=False, message="相手のフィールド設定と一致していません。同期を待ってください")
     if ready and not (my_drone() or {}).get("ip"):
         return jsonify(ok=False, message="自分のドローンのIPがわかりません。「1. ドローンを探す」で探してください")
+    if ready and scanner.active:
+        return jsonify(ok=False, message="フィールドのスキャン中です")
     if state["start_at"]:
         return jsonify(ok=False, message="もう始まっています")
     state["ready"] = ready
@@ -431,11 +456,14 @@ def referee() -> None:
         now = tello_net.now()
         others = room_peers()
         op = others[0] if others else None
-        # Use the only measured map when one PC has it. If both have different
-        # maps, A's map wins so the two copies converge deterministically.
+        # Use the only scanned map when one PC has it; if both have one, the
+        # newer scan wins (A's map if neither says when it was scanned).
+        theirs, mine = (op or {}).get("arena"), arena_layout
+        newer = bool(theirs) and (not mine or (theirs.get("scanned_at") or 0) > (mine.get("scanned_at") or 0)
+                                  or (not theirs.get("scanned_at") and not mine.get("scanned_at")
+                                      and my_role() == "B"))
         should_adopt = (op and not state["ready"] and not state["start_at"]
-                        and op.get("arena") and
-                        (not arena_layout or my_role() == "B"))
+                        and not scanner.active and newer)
         if should_adopt:
             try:
                 incoming = arena.normalize(op["arena"])
