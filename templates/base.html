@@ -17,6 +17,7 @@
   </nav>
   {% block content %}{% endblock %}
 </main>
+{% if page == 'battle' %}<script src="{{ url_for('static', filename='arena_scan.js') }}"></script>{% endif %}
 <script src="{{ url_for('static', filename='app.js') }}"></script>
 </body>
 </html>

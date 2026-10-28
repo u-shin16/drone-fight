@@ -28,12 +28,30 @@ def modes() -> list[dict]:
     return found
 
 
-MAX_HEIGHT = 180
-# The arena, in cm from each player's own start. Players start facing each other.
-START_DISTANCE = 250  # between the two drones at the start
-ARENA_BACK = 150      # how far behind its start a drone may go
-ARENA_SIDE = 150      # how far left / right
-FLEE_HEIGHTS = (60, 160)
+# Shared map in centimetres: x follows the pads' rocket direction, y points right.
+# It must be loaded from measured coordinates before a battle can start.
+PADS = {}
+FIELD = (0, 0, 0, 0)
+STARTS = {}
+
+
+def configure_arena(layout: dict) -> None:
+    global PADS, FIELD, STARTS
+    PADS = {int(k): tuple(v) for k, v in layout["pads"].items()}
+    FIELD = tuple(layout["field"])
+    STARTS = {k: tuple(v) for k, v in layout["starts"].items()}
+MAX_HEIGHT = 110  # the pads can only be seen from 30-120 cm
+MIN_HEIGHT = 50
+FLEE_HEIGHTS = (MIN_HEIGHT, MAX_HEIGHT)
+
+
+def other(role: str) -> str:
+    return "B" if role == "A" else "A"
+
+
+def in_field(x: float, y: float, inset: float = 0) -> bool:
+    x_min, x_max, y_min, y_max = FIELD
+    return x_min + inset <= x <= x_max - inset and y_min + inset <= y <= y_max - inset
 FLEE_STEP = 100  # cm per flee move, so it looks at the opponent again at least every second
 
 
@@ -58,7 +76,7 @@ def charge_steps(me: tuple, opponent: tuple[float, float]) -> list[str]:
             steps.append(f"cw {round(turn)}" if turn > 0 else f"ccw {round(-turn)}")
         heading = bearing
     steps.append("match_height")
-    run = min(500, distance + CHARGE_OVERSHOOT, _room_ahead(x, y, heading))
+    run = min(120, distance + CHARGE_OVERSHOOT, _room_ahead(x, y, heading))
     if run >= 20:
         steps.append(f"forward {round(run)}")
     return steps
@@ -69,8 +87,9 @@ def _room_ahead(x: float, y: float, heading: float) -> float:
     rad = math.radians(heading)
     ux, uy = math.cos(rad), math.sin(rad)
     limits = []
-    for pos, step, low, high in ((x, ux, -ARENA_BACK, START_DISTANCE + ARENA_BACK),
-                                 (y, uy, -ARENA_SIDE, ARENA_SIDE)):
+    x_min, x_max, y_min, y_max = FIELD
+    x_min += 20; x_max -= 20; y_min += 20; y_max -= 20
+    for pos, step, low, high in ((x, ux, x_min, x_max), (y, uy, y_min, y_max)):
         if step > 1e-6:
             limits.append((high - pos) / step)
         elif step < -1e-6:
@@ -82,6 +101,8 @@ GUARD_REACH = 100    # cm: closer than this and the guard hits back
 GUARD_PUSH = 50      # cm of the counter hit
 GUARD_HOME = 30      # cm: farther than this from the start and it walks back first
 KEEPALIVE = 4        # s: poke the drone if nothing was sent for this long (it lands after 15 s)
+STATE_LOST_TIMEOUT = 1.5  # s without any telemetry: do not keep flying blind
+PAD_LOST_TIMEOUT = 3.0    # s without a pad fix: stop before dead-reckoning grows too far
 
 
 def _face(x: float, y: float, heading: float, target: tuple[float, float]) -> tuple[list[str], float]:
@@ -93,16 +114,15 @@ def _face(x: float, y: float, heading: float, target: tuple[float, float]) -> tu
     return [f"cw {round(turn)}" if turn > 0 else f"ccw {round(-turn)}"], bearing
 
 
-def guard_steps(me: tuple, opponent: tuple[float, float]) -> list[str]:
-    """Hold the start, face the opponent, and hit back when it comes within reach.
+def guard_steps(me: tuple, opponent: tuple[float, float], home: tuple[float, float]) -> list[str]:
+    """Hold our start spot, face the opponent, and hit back when it comes within reach.
 
     Returns [] when there is nothing to do but keep watching.
     """
     x, y, _, heading = me
-    away = math.hypot(x, y)
-    if away > GUARD_HOME:
+    if math.hypot(x - home[0], y - home[1]) > GUARD_HOME:
         # Back to our spot first (a counter hit or a bump moved us).
-        command = plans.go_command(-x, -y, 0, heading, 60)
+        command = plans.go_command(home[0] - x, home[1] - y, 0, heading, 60)
         return [command] if command else []
     turn, heading = _face(x, y, heading, opponent)
     if math.hypot(opponent[0] - x, opponent[1] - y) <= GUARD_REACH:
@@ -112,19 +132,18 @@ def guard_steps(me: tuple, opponent: tuple[float, float]) -> list[str]:
 
 DODGE_LINE = 60     # cm: a charge passing closer than this is a threat
 DODGE_STEP = 80     # cm sideways out of the charge line
-DODGE_BOX = (-100, 50, -100, 100)  # x min, x max, y min, y max where the dodger wanders
+DODGE_WANDER = 45   # cm around its start where the dodger wanders
 
 
-def path_in_my_frame(their_pos: dict | None, offset: float = 0.0):
-    """The opponent's current move as (now, end) points in our frame, or None if it is not moving."""
+def opponent_path(their_pos: dict | None, offset: float = 0.0):
+    """The opponent's current move as (now, end) points on the map, or None if it is not moving."""
     if not their_pos or not their_pos.get("move"):
         return None
     move = their_pos["move"]
     if tello_net.now() - (move["start"] - offset) >= move["duration"]:
         return None  # finished (the 'ok' just has not arrived yet)
-    now = opponent_in_my_frame(where_now(their_pos, offset))
-    end = opponent_in_my_frame({"x": move["to"][0], "y": move["to"][1]})
-    return now, end
+    now = where_now(their_pos, offset)
+    return (now["x"], now["y"]), (move["to"][0], move["to"][1])
 
 
 def _segment_distance(px: float, py: float, a: tuple, b: tuple) -> float:
@@ -134,7 +153,8 @@ def _segment_distance(px: float, py: float, a: tuple, b: tuple) -> float:
     return math.hypot(px - (a[0] + vx * t), py - (a[1] + vy * t))
 
 
-def dodge_step(me: tuple, path, rng=random, opponent: tuple | None = None) -> tuple[str | None, bool]:
+def dodge_step(me: tuple, path, rng=random, opponent: tuple | None = None,
+               home: tuple[float, float] = (0, 0)) -> tuple[str | None, bool]:
     """Sidestep out of a charge coming at us, else a small random hop. Returns (command, dodged).
 
     Random hops never end next to the opponent or on its current path.
@@ -151,17 +171,18 @@ def dodge_step(me: tuple, path, rng=random, opponent: tuple | None = None) -> tu
             if 0 < t <= 1.2 and math.hypot(x - cx, y - cy) <= DODGE_LINE:
                 nx, ny = -uy, ux  # across the path
                 side = 1 if (x - cx) * nx + (y - cy) * ny >= 0 else -1
-                for s in (side, -side):  # away from the line, unless that leaves our side
+                for s in (side, -side):  # away from the line, unless that leaves the field
                     tx, ty = x + s * nx * DODGE_STEP, y + s * ny * DODGE_STEP
-                    if -ARENA_BACK <= tx <= START_DISTANCE / 2 - 50 and -ARENA_SIDE <= ty <= ARENA_SIDE:
+                    if in_field(tx, ty, 20):
                         return plans.go_command(tx - x, ty - y, 0, heading, 100), True
     # No threat: wander in small random hops so a 1-second-ahead aim keeps missing.
-    x_min, x_max, y_min, y_max = DODGE_BOX
+    x_min, x_max = home[0] - DODGE_WANDER, home[0] + DODGE_WANDER
+    y_min, y_max = home[1] - DODGE_WANDER, home[1] + DODGE_WANDER
     for _ in range(20):
         angle = rng.uniform(0, 2 * math.pi)
         hop = rng.uniform(30, 50)
         tx, ty = x + hop * math.cos(angle), y + hop * math.sin(angle)
-        if not (x_min <= tx <= x_max and y_min <= ty <= y_max):
+        if not (x_min <= tx <= x_max and y_min <= ty <= y_max and in_field(tx, ty, 20)):
             continue
         if opponent and math.hypot(tx - opponent[0], ty - opponent[1]) < 80:
             continue
@@ -185,7 +206,9 @@ def _turn(heading: float, bearing: float) -> tuple[list[str], float]:
 
 
 def _room_toward(x: float, y: float, bearing: float, wanted: float) -> float:
-    return max(0.0, min(wanted, 500, _room_ahead(x, y, bearing)))
+    # Re-plan between short moves so a charge does not cross the whole field
+    # using only one old estimate of the opponent and our own position.
+    return max(0.0, min(wanted, 120, _room_ahead(x, y, bearing)))
 
 
 def trick_steps(me: tuple, opponent: tuple[float, float], can_flip: bool, rng=random) -> tuple[str, list[str]]:
@@ -236,19 +259,17 @@ def where_now(their_pos: dict | None, offset: float = 0.0, lead: float = 0.0) ->
             "y": move["from"][1] + (move["to"][1] - move["from"][1]) * t}
 
 
-def opponent_in_my_frame(their_pos: dict | None) -> tuple[float, float]:
-    """The opponent starts START_DISTANCE ahead, facing us: flip its own position into ours."""
+def on_map(their_pos: dict | None, their_role: str) -> tuple[float, float]:
+    """The opponent's spot on the shared map (its start until we hear from it)."""
     if not their_pos:
-        return (START_DISTANCE, 0.0)
-    return (START_DISTANCE - their_pos["x"], -their_pos["y"])
+        return STARTS[their_role][:2]
+    return (their_pos["x"], their_pos["y"])
 
 
 def flee_target(opponent: tuple[float, float], opponent_height: int | None) -> tuple[float, float, int]:
-    """The corner of our half of the arena farthest from the opponent, and the height farthest from theirs."""
-    xs = (-ARENA_BACK, START_DISTANCE / 2 - 50)  # never past the middle line
-    ys = (-ARENA_SIDE, ARENA_SIDE)
-    corners = [(x, y) for x in xs for y in ys]
-    x, y = max(corners, key=lambda c: (c[0] - opponent[0]) ** 2 + (c[1] - opponent[1]) ** 2)
+    """Head toward a measured pad far from the opponent so a fix remains reachable."""
+    candidates = [p for p in PADS.values() if in_field(*p, 20)]
+    x, y = max(candidates, key=lambda c: (c[0] - opponent[0]) ** 2 + (c[1] - opponent[1]) ** 2)
     their_h = opponent_height if opponent_height is not None else 80
     z = max(FLEE_HEIGHTS, key=lambda h: abs(h - their_h))
     return (x, y, z)
@@ -258,7 +279,7 @@ def height_fix(mine: int | None, theirs: int | None) -> str | None:
     """The up/down command that brings us to the opponent's height (60-180 cm), if needed."""
     if mine is None or theirs is None:
         return None
-    target = max(60, min(MAX_HEIGHT, theirs))
+    target = max(MIN_HEIGHT, min(MAX_HEIGHT, theirs))
     diff = target - mine
     if abs(diff) < 20:
         return None
@@ -316,7 +337,10 @@ class BattleRunner:
         self.takeoff_at: float | None = None
         self.down_at: float | None = None
         self.height: int | None = None
-        self.pose = (0.0, 0.0, 0.0, 0)  # where our commands have taken us, from the start
+        self.role = "A"
+        self.pose = (0.0, 0.0, 0.0, 0)  # on the shared map: pads when seen, else our commands
+        self.pad_seen_at = 0.0  # last time a mission pad fixed our position (monotonic)
+        self.pad_id: int | None = None
         self.speed = 100  # cm/s, updated by 'speed' commands
         self.speed_set = False  # True once the drone has confirmed a 'speed' command
         self.last_sent = time.monotonic()
@@ -332,12 +356,15 @@ class BattleRunner:
         self.sock: socket.socket | None = None
 
     # ---- public API -------------------------------------------------------
-    def start(self, ip: str, plan: dict) -> None:
+    def start(self, ip: str, plan: dict, role: str = "A") -> None:
         with self.lock:
             if self.phase not in ("idle", "down", "landed"):
                 return
             self._reset()
             self.ip, self.plan, self.phase = ip, dict(plan), "starting"
+            self.role = role
+            # Until a pad is seen we are where our side starts, facing the other side.
+            self.pose = (*STARTS[role][:2], 0.0, STARTS[role][2])
         threading.Thread(target=self._run, daemon=True).start()
         threading.Thread(target=self._watch_state, daemon=True).start()
 
@@ -392,7 +419,9 @@ class BattleRunner:
     def public(self) -> dict:
         x, y, _, heading = self.pose
         return {"phase": self.phase, "airborne": self.airborne, "down_at": self.down_at,
-                "pos": {"x": round(x), "y": round(y), "heading": round(heading), "move": self.motion},
+                "pos": {"x": round(x), "y": round(y), "heading": round(heading), "move": self.motion,
+                        # whether a mission pad fixed this spot in the last second
+                        "pad": self.pad_id if time.monotonic() - self.pad_seen_at < 1 else None},
                 "takeoff_at": self.takeoff_at, "height": self.height, "battery": self.battery,
                 "plan": self._plan_label(), "current": self.current}
 
@@ -452,21 +481,50 @@ class BattleRunner:
                 self.battery = self._send("battery?", 3) or self.battery
 
     def _run(self) -> None:
+        if self.stop_event.is_set():
+            return self._finish("landed", self.stop_reason or "離陸を中止しました")
         self.sock = tello_net.tello_socket(0.2)
         try:
             if self._send("command", 5) != "ok":
                 return self._finish("landed", "ドローンから返事がありません")
             self.battery = self._send("battery?", 5)
+            # Watch the mission pads with the downward camera (20 times a second).
+            if self._send("mon", 5) != "ok" or self._send("mdirection 0", 5) != "ok":
+                return self._finish("landed", "パッド検出をオンにできないため離陸しません")
+            if not self.monitor.listening:
+                return self._finish("landed", "位置情報を受信できないため離陸しません")
             if not self.battery or not self.battery.isdigit() or int(self.battery) < MIN_BATTERY:
                 return self._finish("landed", f"電池が{MIN_BATTERY}%未満なので離陸しません（{self.battery}）")
+            if self.stop_event.is_set():
+                return self._finish("landed", self.stop_reason or "離陸を中止しました")
             self._note(f"離陸します（電池 {self.battery}%）")
             reply = self._send("takeoff", 20)
             if reply != "ok":
                 # A lost reply can still mean it is up: land to be safe.
                 self._send("land", 10)
                 return self._finish("landed", f"離陸できませんでした（{reply}）")
-            self.airborne, self.takeoff_at, self.phase = True, tello_net.now(), "flying"
-            self._note(f"離陸OK。{self._plan_label()} を開始")
+            self.airborne, self.takeoff_at = True, tello_net.now()
+            # Take off over pad 4 (A) or pad 6 (B); verify the actual pad before
+            # any battle movement. A photo alone cannot confirm the real setup.
+            expected = 4 if self.role == "A" else 6
+            entered_at = time.monotonic()
+            deadline = entered_at + 3
+            confirmed = False
+            while not self.stop_event.is_set() and time.monotonic() < deadline:
+                if self.pad_seen_at >= entered_at:
+                    if self.pad_id != expected:
+                        self.stop_reason = f"開始位置のパッドが{self.pad_id}番です（{expected}番が必要）"
+                        return
+                    confirmed = True
+                    break
+                self.stop_event.wait(0.05)
+            if self.stop_event.is_set():
+                return
+            if not confirmed:
+                self.stop_reason = f"開始位置のパッド{expected}を確認できませんでした"
+                return
+            self.phase = "flying"
+            self._note(f"パッド{expected}を確認。{self._plan_label()} を開始")
             self._fly_plan()
         finally:
             if self.phase in ("starting", "flying"):
@@ -501,8 +559,9 @@ class BattleRunner:
                     continue  # already flying at this speed: no need to send it every loop
                 if line == "dodge":
                     raw, offset = self.opponent_raw()
-                    line, dodged = dodge_step(self.pose, path_in_my_frame(raw, offset),
-                                              opponent=opponent_in_my_frame(where_now(raw, offset)))
+                    line, dodged = dodge_step(self.pose, opponent_path(raw, offset),
+                                              opponent=on_map(where_now(raw, offset), other(self.role)),
+                                              home=STARTS[self.role][:2])
                     if dodged:
                         self._note("回避: 相手の突進の線から横へ")
                     if line is None:
@@ -537,15 +596,29 @@ class BattleRunner:
                     continue  # never climb far above the arena ceiling
                 if self.stop_event.is_set():
                     break  # stopped while waiting for a fresh height: send nothing more
+                try:
+                    target = plans.move(self.pose, line)
+                except ValueError:
+                    target = None
+                translated = target is not None and math.hypot(target[0] - self.pose[0], target[1] - self.pose[1]) >= 1
+                if target is not None and not in_field(target[0], target[1], 10):
+                    self.stop_reason = f"飛行範囲を出る命令を止めました: {line}"
+                    return
                 self._announce_move(line)
+                sent_at = time.monotonic()
                 reply = self._send(line)
+                motion = self.motion
                 self.motion = None
                 self.moved_at = time.monotonic()
-                if reply == "ok":
-                    try:
-                        self.pose = plans.move(self.pose, line)
-                    except ValueError:
-                        pass
+                if reply == "ok" and target is not None:
+                    if self.pad_seen_at > sent_at and not translated:
+                        # A turn or height change: keep the position just measured by a pad.
+                        self.pose = (self.pose[0], self.pose[1], target[2], target[3])
+                    elif translated and motion:
+                        # Pad fixes have shifted the advertised path while we moved.
+                        self.pose = (motion["to"][0], motion["to"][1], target[2], target[3])
+                    else:
+                        self.pose = target
                     if line.startswith("speed "):
                         self.speed = int(line.split()[1])
                         self.speed_set = True
@@ -585,8 +658,8 @@ class BattleRunner:
             self.battery = self._send("battery?", 3) or self.battery
 
     def _guard_plan(self) -> list[str]:
-        opponent = opponent_in_my_frame(self.opponent_pos(0.3))
-        steps = guard_steps(self.pose, opponent)
+        opponent = on_map(self.opponent_pos(0.3), other(self.role))
+        steps = guard_steps(self.pose, opponent, STARTS[self.role][:2])
         if any(s.startswith("forward") for s in steps):
             self._note(f"迎え撃つ: 相手({round(opponent[0])}, {round(opponent[1])}) → {' / '.join(steps)}")
         elif any(s.startswith("go") for s in steps):
@@ -594,7 +667,7 @@ class BattleRunner:
         return steps
 
     def _trick_plan(self) -> list[str]:
-        opponent = opponent_in_my_frame(self.opponent_pos(CHARGE_LEAD))
+        opponent = on_map(self.opponent_pos(CHARGE_LEAD), other(self.role))
         battery = int(self.battery) if self.battery and str(self.battery).isdigit() else 0
         can_flip = battery >= FLIP_MIN_BATTERY and (self.height or 0) >= FLIP_MIN_HEIGHT
         name, steps = trick_steps(self.pose, opponent, can_flip)
@@ -603,14 +676,14 @@ class BattleRunner:
         return steps
 
     def _charge_plan(self) -> list[str]:
-        opponent = opponent_in_my_frame(self.opponent_pos(CHARGE_LEAD))
+        opponent = on_map(self.opponent_pos(CHARGE_LEAD), other(self.role))
         steps = charge_steps(self.pose, opponent)
         self._note(f"突進: 相手({round(opponent[0])}, {round(opponent[1])}) → {' / '.join(steps)}")
         return steps
 
     def _flee_step(self) -> str | None:
         """One 'go' toward the spot farthest from the opponent, or None if we are there."""
-        opponent = opponent_in_my_frame(self.opponent_pos())
+        opponent = on_map(self.opponent_pos(), other(self.role))
         tx, ty, tz = flee_target(opponent, self.opponent_height())
         x, y, _, heading = self.pose
         # Change height only on a reading taken after the last move, and never above the ceiling,
@@ -653,6 +726,18 @@ class BattleRunner:
         seen = 0.0
         while self.phase in ("starting", "flying"):
             time.sleep(0.05)
+            if self.phase == "flying":
+                age = time.monotonic()
+                if self.height_at and age - self.height_at > STATE_LOST_TIMEOUT:
+                    self.stop_reason = "位置情報が途切れたため着陸"
+                    self.stop_event.set()
+                    self._raw("stop")
+                    return
+                if self.pad_seen_at and age - self.pad_seen_at > PAD_LOST_TIMEOUT:
+                    self.stop_reason = "パッドを見失ったため着陸"
+                    self.stop_event.set()
+                    self._raw("stop")
+                    return
             reading = self.monitor.latest.get(self.ip)
             if not reading or reading["at"] == seen:
                 continue
@@ -661,6 +746,25 @@ class BattleRunner:
                 continue
             self.height, self.tof, self.height_at = reading["h"], reading["tof"], reading["at"]
             self.battery = reading["bat"] or self.battery
+            pad = reading.get("mid")
+            if pad in PADS and self.airborne and reading["x"] is not None and reading["y"] is not None:
+                # A pad in view: our true spot. Pad y points left, the map's y points right.
+                px, py = PADS[pad]
+                tx, ty = px + reading["x"], py - reading["y"]
+                motion = self.motion
+                if motion:
+                    # Mid-move: compare with where the move should have got us by now.
+                    t = (tello_net.now() - motion["start"]) / max(0.1, motion["duration"])
+                    t = max(0.0, min(1.0, t))
+                    ex = motion["from"][0] + (motion["to"][0] - motion["from"][0]) * t
+                    ey = motion["from"][1] + (motion["to"][1] - motion["from"][1]) * t
+                    dx, dy = tx - ex, ty - ey
+                    motion["from"][0] += dx
+                    motion["from"][1] += dy
+                    motion["to"][0] += dx
+                    motion["to"][1] += dy
+                self.pose = (tx, ty, self.pose[2], self.pose[3])
+                self.pad_seen_at, self.pad_id = reading["at"], pad
             on_ground = self.height <= 10 and self.tof <= 30
             settled = self.takeoff_at and tello_net.now() - self.takeoff_at > 3
             if self.phase == "flying" and on_ground and settled:
@@ -705,7 +809,9 @@ class StateMonitor:
                 except (KeyError, ValueError):
                     return None
             self.latest[source[0]] = {"h": number("h"), "tof": number("tof"),
-                                      "bat": fields.get("bat"), "at": time.monotonic()}
+                                      "bat": fields.get("bat"), "at": time.monotonic(),
+                                      # mission pad: id (-1 = none) and our spot over it (cm)
+                                      "mid": number("mid"), "x": number("x"), "y": number("y")}
 
     def battery(self, ip: str | None, max_age: float = 3) -> str | None:
         reading = self.latest.get(ip or "")

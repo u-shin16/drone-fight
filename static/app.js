@@ -247,13 +247,60 @@ function droneState(b) {
   return (STATE_TEXT[b.phase] || b.phase) + (b.airborne && b.height != null ? "（高さ " + b.height + "cm）" : "");
 }
 
+// ---- the pad arena map (screen right = the rockets' direction, A to B) ----
+function drawArena(s, opponent) {
+  const a = s.arena;
+  if (!a) {
+    $("arena-map").textContent = "8枚のパッドと飛行範囲を設定してください";
+    return;
+  }
+  const [xMin, xMax, yMin, yMax] = a.field;
+  const scale = Math.min(1.6, 500 / Math.max(xMax - xMin, yMax - yMin));
+  const W = (xMax - xMin) * scale, H = (yMax - yMin) * scale;
+  const sx = (x) => (x - xMin) * scale, sy = (y) => (y - yMin) * scale;
+  const pad = 19.5 * scale;
+  let svg = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="フィールドの地図">`;
+  svg += `<rect x="0" y="0" width="${W}" height="${H}" class="field"/>`;
+  for (const [id, [x, y]] of Object.entries(a.pads)) {
+    svg += `<rect x="${sx(x) - pad / 2}" y="${sy(y) - pad / 2}" width="${pad}" height="${pad}" rx="4" class="pad"/>`;
+    svg += `<text x="${sx(x)}" y="${sy(y) + 5}" class="pad-id">${id}</text>`;
+    svg += `<text x="${sx(x) + pad / 2 + 8}" y="${sy(y) + 4}" class="rocket">▶</text>`;
+  }
+  for (const [side, [x, y]] of Object.entries(a.starts)) {
+    svg += `<text x="${sx(x)}" y="${sy(y) + (side === "A" ? 24 : -14)}" class="side">${side}側</text>`;
+  }
+  const drone = (pos, cls, label) => {
+    if (!pos) return "";
+    const rad = (pos.heading || 0) * Math.PI / 180;
+    const hx = sx(pos.x + Math.cos(rad) * 18), hy = sy(pos.y + Math.sin(rad) * 18);
+    return `<line x1="${sx(pos.x)}" y1="${sy(pos.y)}" x2="${hx}" y2="${hy}" class="${cls} heading"/>` +
+      `<circle cx="${sx(pos.x)}" cy="${sy(pos.y)}" r="9" class="${cls}"/>` +
+      `<text x="${sx(pos.x)}" y="${sy(pos.y) - 13}" class="label">${label}${pos.pad ? "（パッド" + pos.pad + "）" : ""}</text>`;
+  };
+  const flying = (b) => b && ["starting", "flying"].includes(b.phase);
+  svg += drone(flying(opponent && opponent.battle) ? opponent.battle.pos : null, "op", "相手");
+  svg += drone(flying(s.me) ? s.me.pos : null, "me", "あなた");
+  svg += "</svg>";
+  $("arena-map").innerHTML = svg;
+}
+
 function renderBattle(s) {
   const opponent = s.matching ? s.peers[0] : null;
   $("no-match").hidden = !!opponent;
   $("room").hidden = !opponent;
+  $("room-part2").hidden = !opponent;
+  $("arena-setup").hidden = !!s.start_at;
+  const peerOwnsMap = !!opponent && s.role === "B" && !!opponent.arena_hash;
+  $("scan-photo").disabled = s.ready || !!s.start_at || peerOwnsMap;
+  $("save-arena").disabled = s.ready || !!s.start_at || peerOwnsMap || !window.arenaScan.ready();
+  $("arena-sync").textContent = !s.arena ? "配置未登録。準備OKに進めません。" : !opponent ?
+    "このPCに配置を保存済みです。相手とマッチすると地図を共有します。" :
+    (opponent.arena_hash === s.arena_hash ? "両PCの配置は一致しています。" : "相手PCと配置を同期しています。準備OKに進めません。");
   if (!opponent) return;
   setPlayerCard("me", s.player, s.my_drone, s.ready);
   setPlayerCard("op", opponent.player, opponent.drone, opponent.ready);
+  drawArena(s, opponent);
+  $("role-line").textContent = "あなたは " + s.role + "側。地図の開始位置に相手の方を向けて置いてください。";
   $("limit").textContent = s.battle_seconds;
   $("log").textContent = s.me.log.join("\n");
 
@@ -271,7 +318,7 @@ function renderBattle(s) {
     $("plan-list").classList.toggle("locked", s.ready);
     $("ready").textContent = s.ready ? "準備OKを取り消す" : "準備OK";
     $("ready").className = "big-button" + (s.ready ? " ghost" : "");
-    $("ready").disabled = !s.plan;
+    $("ready").disabled = !s.plan || (!s.ready && (!s.arena || opponent.arena_hash !== s.arena_hash));
     $("room-status").textContent = planText + " ／ " + (s.ready && opponent.ready ? "まもなくスタート！"
       : s.ready ? "相手の準備を待っています…" : "準備ができたら「準備OK」を押してください");
     return;
@@ -355,6 +402,15 @@ if (page === "peers") {
   });
 }
 if (page === "battle") {
+  $("save-arena").addEventListener("click", async () => {
+    let value;
+    try { value = window.arenaScan.layout(); }
+    catch (e) { $("arena-msg").textContent = e.message; return; }
+    const r = await post("/api/arena", value);
+    $("arena-msg").className = r.ok ? "msg ok-text" : "msg error";
+    $("arena-msg").textContent = r.ok ? "保存しました。相手へ送信します。" : r.message;
+    refresh();
+  });
   for (const b of document.querySelectorAll(".segment button")) {
     b.addEventListener("click", () => showView(b.dataset.view));
   }

@@ -16,6 +16,7 @@ from pathlib import Path
 from flask import Flask, abort, jsonify, render_template, request
 
 import battle
+import arena
 import plans
 import tello_net
 
@@ -24,6 +25,9 @@ app = Flask(__name__)
 app.config["TEMPLATES_AUTO_RELOAD"] = True  # screen changes show up without a restart
 state = {"drones": [], "scanned_at": None, "scanning": False, "message": "",
          "matching": False, "ready": False, "plan": None, "start_at": None, "result": None}
+arena_layout = arena.load()
+if arena_layout:
+    battle.configure_arena(arena_layout)
 BATTLE_SECONDS = 60
 COUNTDOWN_SECONDS = 5
 runner = battle.BattleRunner(
@@ -92,7 +96,14 @@ def my_room() -> str | None:
 def public_info() -> dict:
     return {"player": tello_net.load_settings().get("player", ""), "drone": my_drone(),
             "room": my_room(), "ready": state["matching"] and state["ready"],
-            "start_at": state["start_at"], "battle": runner.public()}
+            "start_at": state["start_at"], "battle": runner.public(),
+            "arena": arena_layout, "arena_hash": arena.fingerprint(arena_layout)}
+
+
+def my_role() -> str:
+    """Side A or B on the pad map: the player whose id sorts first is A (it also sets the start time)."""
+    others = room_peers()
+    return "A" if not others or peers.instance < others[0].get("instance", "") else "B"
 
 
 def room_peers() -> list[dict]:
@@ -101,7 +112,7 @@ def room_peers() -> list[dict]:
     return [p for p in peers.current() if room and p.get("room") == room]
 
 
-peers = tello_net.PeerFinder(public_info)
+peers = tello_net.PeerFinder(public_info, port=int(os.environ.get("PEER_PORT", tello_net.PEER_PORT)))
 
 PORT = int(os.environ.get("PORT", 5050))
 ALLOWED_HOSTS = {f"127.0.0.1:{PORT}", f"localhost:{PORT}"}
@@ -168,7 +179,8 @@ def api_state():
         drones=drones,
         # Only players matching with the same 4-digit code are shown.
         peers=[{"player": p.get("player", ""), "ip": p["ip"], "drone": p.get("drone"),
-                "ready": bool(p.get("ready")), "battle": p.get("battle")} for p in room_peers()],
+                "ready": bool(p.get("ready")), "battle": p.get("battle"),
+                "arena_hash": p.get("arena_hash")} for p in room_peers()],
         matching=state["matching"],
         ready=state["ready"],
         plan=state["plan"],
@@ -176,6 +188,9 @@ def api_state():
         now=tello_net.now(),
         battle_seconds=BATTLE_SECONDS,
         result=state["result"],
+        role=my_role(),
+        arena=arena_layout,
+        arena_hash=arena.fingerprint(arena_layout),
         me=runner.details(),
         choices=battle.choices(),
         plan_key=battle.plan_key(state["plan"]),
@@ -278,6 +293,22 @@ def battle_page():
     return render_template("battle.html", page="battle")
 
 
+@app.post("/api/arena")
+def api_arena():
+    """Save measured pad and boundary coordinates before either player is ready."""
+    global arena_layout
+    if state["ready"] or state["start_at"] or runner.phase in ("starting", "flying"):
+        return jsonify(ok=False, message="準備OKを取り消してからフィールドを変更してください")
+    try:
+        layout = arena.save(request.get_json())
+    except (ValueError, TypeError) as exc:
+        return jsonify(ok=False, message=str(exc))
+    arena_layout = layout
+    battle.configure_arena(layout)
+    peers.announce()
+    return jsonify(ok=True, hash=arena.fingerprint(layout))
+
+
 @app.post("/api/plan")
 def api_plan():
     body = request.get_json()
@@ -308,6 +339,10 @@ def api_ready():
     ready = bool(request.get_json().get("ready"))
     if ready and not state["plan"]:
         return jsonify(ok=False, message="先にモードかファイルを選んでください")
+    if ready and not arena_layout:
+        return jsonify(ok=False, message="先に8枚のパッドと飛行範囲を実寸で設定してください")
+    if ready and (room_peers()[0].get("arena_hash") != arena.fingerprint(arena_layout)):
+        return jsonify(ok=False, message="相手のフィールド設定と一致していません。同期を待ってください")
     if ready and not (my_drone() or {}).get("ip"):
         return jsonify(ok=False, message="自分のドローンのIPがわかりません。「1. ドローンを探す」で探してください")
     if state["start_at"]:
@@ -389,18 +424,37 @@ def decide(me: dict, op: dict | None, now: float) -> dict | None:
 
 def referee() -> None:
     """Start both players together, end on time and decide the winner."""
+    global arena_layout
     last_seen = tello_net.now()
     while True:
         time.sleep(0.2)
         now = tello_net.now()
         others = room_peers()
         op = others[0] if others else None
+        # Use the only measured map when one PC has it. If both have different
+        # maps, A's map wins so the two copies converge deterministically.
+        should_adopt = (op and not state["ready"] and not state["start_at"]
+                        and op.get("arena") and
+                        (not arena_layout or my_role() == "B"))
+        if should_adopt:
+            try:
+                incoming = arena.normalize(op["arena"])
+                if arena.fingerprint(incoming) != arena.fingerprint(arena_layout):
+                    arena_layout = arena.save(incoming)
+                    battle.configure_arena(arena_layout)
+                    peers.announce()
+            except (ValueError, TypeError):
+                pass
+        matching_arena = bool(arena_layout and op and op.get("arena_hash") == arena.fingerprint(arena_layout))
+        if state["ready"] and not matching_arena and not state["start_at"]:
+            state["ready"] = False
+            peers.announce()
         # The opponent's times are on their clock; shift them onto ours.
         offset = (op or {}).get("offset", 0)
         if op:
             last_seen = now
         # 1) Both ready: the player with the smaller id sets the start time for both.
-        if state["ready"] and op and op.get("ready") and not state["start_at"]:
+        if state["ready"] and op and op.get("ready") and matching_arena and not state["start_at"]:
             if peers.instance < op.get("instance", ""):
                 state["start_at"] = now + COUNTDOWN_SECONDS
                 peers.announce()
@@ -414,9 +468,13 @@ def referee() -> None:
             peers.announce()
         # 2) Take off at the agreed moment.
         if runner.phase == "idle" and now >= start_at and not state["result"]:
+            if not matching_arena:
+                state.update(ready=False, start_at=None)
+                peers.announce()
+                continue
             drone = my_drone() or {}
             if drone.get("ip") and state["plan"]:
-                runner.start(drone["ip"], state["plan"])
+                runner.start(drone["ip"], state["plan"], my_role())
         if state["result"] or runner.phase == "idle":
             continue
         # 3) Decide.
