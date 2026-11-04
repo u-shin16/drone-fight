@@ -11,9 +11,33 @@ import tello_net
 FILE = tello_net.DATA_DIR / "arena.json"
 
 
+def _number(value, label: str, low: float, high: float) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise ValueError(f"{label}を数字で入れてください")
+    if not low <= value <= high:
+        raise ValueError(f"{label}は{low:g}〜{high:g}cmにしてください")
+    return round(float(value), 1)
+
+
+def simple(value: dict) -> dict:
+    """No mission pads: A and B start 'distance' apart facing each other; positions are predicted."""
+    distance = _number(value.get("distance"), "2台の距離", 100, 500)
+    back = _number(value.get("back"), "後ろの余裕", 50, 300)
+    side = _number(value.get("side"), "左右の余裕", 50, 300)
+    result = {"kind": "simple", "distance": distance, "back": back, "side": side, "pads": {},
+              "field": [-back, distance + back, -side, side],
+              "starts": {"A": [0.0, 0.0, 0], "B": [distance, 0.0, 180]}}
+    scanned_at = value.get("scanned_at")
+    if isinstance(scanned_at, (int, float)) and not isinstance(scanned_at, bool) and math.isfinite(scanned_at):
+        result["scanned_at"] = round(float(scanned_at), 3)
+    return result
+
+
 def normalize(value: dict) -> dict:
     if not isinstance(value, dict):
         raise ValueError("フィールド設定がありません")
+    if value.get("kind") == "simple":
+        return simple(value)
     if value.get("preset") is not None:
         if value.get("preset") != "rows8":
             raise ValueError("配置の種類が不正です")

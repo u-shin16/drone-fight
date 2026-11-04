@@ -292,7 +292,7 @@ function drawArena(s, opponent) {
 }
 
 function arenaSyncText(s, opponent) {
-  if (!s.arena) return "地図がありません。「フィールド」画面でスキャンするまで準備OKに進めません。";
+  if (!s.arena) return "フィールドの設定がありません。「フィールド」画面で設定するまで準備OKに進めません。";
   if (!opponent) return "このPCに地図を保存済みです。マッチすると相手と同じ地図にそろえます。";
   return opponent.arena_hash === s.arena_hash ? "両PCの地図は一致しています。"
     : "相手PCと地図をそろえています。一致するまで準備OKに進めません。";
@@ -301,9 +301,40 @@ function arenaSyncText(s, opponent) {
 // ---- フィールド page: the scan ----
 const PHASE_TITLE = { idle: "まだスキャンしていません", running: "スキャン中…", done: "スキャン完了", failed: "スキャン失敗" };
 
+let fieldKind = null;  // which tab the フィールド page shows: "pads" or "simple"
+let simpleLoaded = false;
+
+function showFieldKind(kind) {
+  fieldKind = kind;
+  for (const b of document.querySelectorAll(".segment [data-kind]")) b.classList.toggle("on", b.dataset.kind === kind);
+  $("pads-card").hidden = kind !== "pads";
+  $("simple-card").hidden = kind !== "simple";
+  $("pad-badges").hidden = kind !== "pads";
+}
+
 function renderField(s) {
   const sc = s.arena_scan;
   const running = sc.phase === "running";
+  const savedKind = s.arena ? (s.arena.kind === "simple" ? "simple" : "pads") : null;
+  if (fieldKind === null) showFieldKind(running ? "pads" : (savedKind || "pads"));
+  $("kind-note").textContent = !s.arena ? "まだ設定がありません。どちらかで設定するまで準備OKに進めません。" :
+    savedKind === "simple" ? `今の設定：パッドなし（2台の距離 ${s.arena.distance}cm）。相手の位置は予想です。` :
+    "今の設定：パッドで正確に（スキャンした8枚の地図）。";
+  if (s.arena && savedKind === "simple" && !simpleLoaded) {
+    $("s-distance").value = s.arena.distance; $("s-back").value = s.arena.back; $("s-side").value = s.arena.side;
+    simpleLoaded = true;
+  }
+  for (const b of document.querySelectorAll(".segment [data-kind]")) b.disabled = running;
+  $("simple-save").disabled = running || s.ready;
+  if (fieldKind === "simple") {
+    $("scan-title").textContent = savedKind === "simple" ? "保存済みの設定（パッドなし）" : "パッドなしの設定はまだありません";
+    $("scan-title").className = "";
+    $("scan-progress").textContent = "";
+    $("scan-sync").textContent = arenaSyncText(s, s.matching ? s.peers[0] : null);
+    if (savedKind === "simple") drawMap($("scan-map"), s.arena.field, {}, s.arena.starts, []);
+    else $("scan-map").textContent = "下で距離を入れて保存すると、ここに出ます";
+    return;
+  }
   $("scan-start").hidden = running;
   $("scan-stop").hidden = !running;
   for (const id of ["b-back", "b-front", "b-far", "b-near"]) $(id).disabled = running;
@@ -348,7 +379,13 @@ function renderBattle(s) {
   setPlayerCard("me", s.player, s.my_drone, s.ready);
   setPlayerCard("op", opponent.player, opponent.drone, opponent.ready);
   drawArena(s, opponent);
-  $("role-line").textContent = "あなたは " + s.role + "側。地図の開始位置に相手の方を向けて置いてください。";
+  const simple = s.arena && s.arena.kind === "simple";
+  $("role-line").textContent = "あなたは " + s.role + "側。" + (simple
+    ? `相手と${s.arena.distance}cm離して、相手の方を向けて置いてください（パッドなし）。`
+    : "地図の開始位置（A＝パッド4、B＝パッド6）に相手の方を向けて置いてください。");
+  $("arena-kind-help").textContent = simple
+    ? "パッドなしモード：相手の位置は、お互いが送った移動命令から予想します。動くほどずれます。地図の外枠が飛行範囲です。"
+    : "パッドモード：地図は「フィールド」画面でドローンが飛んで測ったものです。パッドが見えると位置を直し、見えない間は移動命令から予想します。地図の外枠が飛行範囲です。";
   $("limit").textContent = s.battle_seconds;
   $("log").textContent = s.me.log.join("\n");
 
@@ -451,6 +488,16 @@ if (page === "peers") {
   });
 }
 if (page === "field") {
+  for (const b of document.querySelectorAll(".segment [data-kind]")) {
+    b.addEventListener("click", () => { showFieldKind(b.dataset.kind); refresh(); });
+  }
+  $("simple-save").addEventListener("click", async () => {
+    const value = (id) => $(id).value === "" ? null : Number($(id).value);
+    const r = await post("/api/arena/simple", { distance: value("s-distance"), back: value("s-back"), side: value("s-side") });
+    $("simple-msg").className = r.ok ? "msg ok-text" : "msg error";
+    $("simple-msg").textContent = r.ok ? "保存しました。相手のPCにも同じ設定が届きます。" : r.message;
+    refresh();
+  });
   const stopScan = () => post("/api/arena/scan/stop").then(refresh);
   $("scan-stop").addEventListener("click", stopScan);
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("scan-stop").hidden) stopScan(); });

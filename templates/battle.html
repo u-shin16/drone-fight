@@ -35,15 +35,14 @@
     <div class="arena-help">
       <h2>フィールド（ミッションパッド）</h2>
       <p id="role-line" class="role-line"></p>
-      <p class="muted">地図は「フィールド」画面でドローンが実際に飛んで測ったものです。A機はパッド4の中心にロケットの向きで、B機はパッド6の中心に反対向きで置いてください。</p>
-      <p class="muted">飛んでいる間、パッドが見えると位置を直し、見えない間は移動命令から推定します。地図の外枠が飛行範囲です。</p>
+      <p class="muted" id="arena-kind-help"></p>
     </div>
   </section>
 </div>
   <section class="card" id="arena-status">
     <div class="row" style="justify-content:space-between">
       <p id="arena-sync" class="muted" style="margin:0"></p>
-      <a class="button ghost" href="{{ url_for('field_page') }}">フィールドをスキャン →</a>
+      <a class="button ghost" href="{{ url_for('field_page') }}">フィールドを設定 →</a>
     </div>
   </section>
 

@@ -16,6 +16,8 @@ if "irregular" in sys.argv[5:]:
                                        "7": [-65, 110], "8": [100, 120]},
                               "field": [-220, 210, -160, 160],
                               "starts": {"A": [-160, 20, 0], "B": [155, 35, 180]}})
+elif "simple" in sys.argv[5:]:
+    layout = arena.normalize({"kind": "simple", "distance": 250, "back": 150, "side": 150})
 else:
     layout = arena.normalize({"preset": "rows8", "spacing": 60})
 (SP / "layout.json").write_text(json.dumps(layout))

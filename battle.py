@@ -37,7 +37,7 @@ STARTS = {}
 
 def configure_arena(layout: dict) -> None:
     global PADS, FIELD, STARTS
-    PADS = {int(k): tuple(v) for k, v in layout["pads"].items()}
+    PADS = {int(k): tuple(v) for k, v in layout["pads"].items()}  # empty = no-pad mode
     FIELD = tuple(layout["field"])
     STARTS = {k: tuple(v) for k, v in layout["starts"].items()}
 MAX_HEIGHT = 110  # the pads can only be seen from 30-120 cm
@@ -269,6 +269,9 @@ def on_map(their_pos: dict | None, their_role: str) -> tuple[float, float]:
 def flee_target(opponent: tuple[float, float], opponent_height: int | None) -> tuple[float, float, int]:
     """Head toward a measured pad far from the opponent so a fix remains reachable."""
     candidates = [p for p in PADS.values() if in_field(*p, 20)]
+    if not candidates:  # no pads: the corners of the field
+        x_min, x_max, y_min, y_max = FIELD
+        candidates = [(cx, cy) for cx in (x_min + 20, x_max - 20) for cy in (y_min + 20, y_max - 20)]
     x, y = max(candidates, key=lambda c: (c[0] - opponent[0]) ** 2 + (c[1] - opponent[1]) ** 2)
     their_h = opponent_height if opponent_height is not None else 80
     z = max(FLEE_HEIGHTS, key=lambda h: abs(h - their_h))
@@ -488,8 +491,8 @@ class BattleRunner:
             if self._send("command", 5) != "ok":
                 return self._finish("landed", "ドローンから返事がありません")
             self.battery = self._send("battery?", 5)
-            # Watch the mission pads with the downward camera (20 times a second).
-            if self._send("mon", 5) != "ok" or self._send("mdirection 0", 5) != "ok":
+            # Pad mode: watch the mission pads with the downward camera (20 times a second).
+            if PADS and (self._send("mon", 5) != "ok" or self._send("mdirection 0", 5) != "ok"):
                 return self._finish("landed", "パッド検出をオンにできないため離陸しません")
             if not self.monitor.listening:
                 return self._finish("landed", "位置情報を受信できないため離陸しません")
@@ -504,6 +507,12 @@ class BattleRunner:
                 self._send("land", 10)
                 return self._finish("landed", f"離陸できませんでした（{reply}）")
             self.airborne, self.takeoff_at = True, tello_net.now()
+            if not PADS:
+                # No-pad mode: we start where the field says and predict from our moves.
+                self.phase = "flying"
+                self._note(f"パッドなしモード。{self._plan_label()} を開始")
+                self._fly_plan()
+                return
             # Take off over pad 4 (A) or pad 6 (B); verify the actual pad before
             # any battle movement. A photo alone cannot confirm the real setup.
             expected = 4 if self.role == "A" else 6
@@ -733,7 +742,7 @@ class BattleRunner:
                     self.stop_event.set()
                     self._raw("stop")
                     return
-                if self.pad_seen_at and age - self.pad_seen_at > PAD_LOST_TIMEOUT:
+                if PADS and self.pad_seen_at and age - self.pad_seen_at > PAD_LOST_TIMEOUT:
                     self.stop_reason = "パッドを見失ったため着陸"
                     self.stop_event.set()
                     self._raw("stop")

@@ -1,6 +1,35 @@
 {% extends "base.html" %}
 {% block content %}
 <section class="card">
+  <div class="picker-head">
+    <h2>フィールドの種類</h2>
+    <div class="segment" role="tablist">
+      <button role="tab" data-kind="pads" class="on">パッドで正確に</button>
+      <button role="tab" data-kind="simple">パッドなし（予測）</button>
+    </div>
+  </div>
+  <p class="muted" style="margin:0" id="kind-note"></p>
+</section>
+
+<section class="card" id="simple-card" hidden>
+  <h2>パッドなしで戦う</h2>
+  <p style="margin-top:0">ミッションパッドを使わず、2台を決まった距離で向かい合わせに置いて戦います。相手の位置は、お互いが送った移動命令から<b>予想</b>するので、動くほどずれていきます。</p>
+  <ol class="steps-list">
+    <li>A機とB機を、下に入れた<b>距離だけ離して、相手の方を向けて</b>置く。</li>
+    <li>それぞれの機体の<b>後ろ</b>と、2台を結ぶ線から<b>左右</b>に、何cmまで安全に飛べるかを入れる。この長方形の外には出ません。</li>
+  </ol>
+  <div class="bounds">
+    <label>2台の距離<input id="s-distance" type="number" min="100" max="500" step="10" placeholder="cm"></label>
+    <label>それぞれの後ろの余裕<input id="s-back" type="number" min="50" max="300" step="10" placeholder="cm"></label>
+    <label>左右の余裕<input id="s-side" type="number" min="50" max="300" step="10" placeholder="cm"></label>
+  </div>
+  <div class="row" style="margin-top:14px">
+    <button id="simple-save">この設定で保存</button>
+    <span class="msg" id="simple-msg"></span>
+  </div>
+</section>
+
+<section class="card" id="pads-card">
   <h2>フィールドをスキャンする（最初に1回）</h2>
   <p style="margin-top:0">自分のドローンがパッドの上を飛んで、8枚の位置を実際に測って地図を作ります。写真はいりません。</p>
   <ol class="steps-list">

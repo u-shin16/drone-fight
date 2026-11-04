@@ -28,6 +28,15 @@ class ArenaTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "左右の並び"):
             arena.normalize(bad)
 
+    def test_simple_mode_needs_no_pads(self):
+        layout = arena.normalize({"kind": "simple", "distance": 250, "back": 150, "side": 120})
+        self.assertEqual(layout["pads"], {})
+        self.assertEqual(layout["field"], [-150.0, 400.0, -120.0, 120.0])
+        self.assertEqual(layout["starts"]["B"], [250.0, 0.0, 180])
+        for bad in ({"distance": 50}, {"distance": 250, "back": 10}, {"distance": "x"}):
+            with self.assertRaises(ValueError):
+                arena.normalize({"kind": "simple", "back": 150, "side": 150, **bad})
+
 
 if __name__ == "__main__":
     unittest.main()

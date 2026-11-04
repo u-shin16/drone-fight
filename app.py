@@ -326,6 +326,21 @@ def api_arena_scan():
     return jsonify(ok=message is None, message=message)
 
 
+@app.post("/api/arena/simple")
+def api_arena_simple():
+    """No-pad mode: just the start distance and the room around the two drones."""
+    if state["ready"] or state["start_at"] or runner.phase in ("starting", "flying") or scanner.active:
+        return jsonify(ok=False, message="準備OK・バトル中・スキャン中は変えられません")
+    body = request.get_json()
+    try:
+        layout = arena.normalize({"kind": "simple", "distance": body.get("distance"), "back": body.get("back"),
+                                  "side": body.get("side"), "scanned_at": tello_net.now()})
+    except (ValueError, TypeError) as exc:
+        return jsonify(ok=False, message=str(exc))
+    save_scanned_arena(layout)
+    return jsonify(ok=True)
+
+
 @app.post("/api/arena/scan/stop")
 def api_arena_scan_stop():
     scanner.stop()
