@@ -11,6 +11,28 @@ import tello_net
 FILE = tello_net.DATA_DIR / "arena.json"
 
 
+# The pad sets a field can use. Positions are always measured by the scan; only
+# the numbering pattern and which pads the two drones start on are fixed here.
+#   pads8:   1 2 3 / 4 5 6 / 7 8   (far row first), A starts on pad 4 and B on pad 6
+#   square4: 1 2 / 3 4             (far row first), A starts on pad 3 and B on pad 4
+SETS = {"pads8": {"ids": tuple("12345678"), "starts": {"A": "4", "B": "6"}},
+        "square4": {"ids": tuple("1234"), "starts": {"A": "3", "B": "4"}}}
+
+
+def pad_set(ids) -> str | None:
+    """Which pad set these pad numbers form ('pads8' or 'square4'), or None."""
+    keys = {str(k) for k in ids}
+    return next((name for name, spec in SETS.items() if keys == set(spec["ids"])), None)
+
+
+def start_pads(layout: dict) -> dict[str, str]:
+    """{'A': pad id, 'B': pad id} the two drones take off from, for a layout with pads."""
+    kind = pad_set(layout["pads"])
+    if kind is None:
+        raise ValueError("パッドの組み合わせが不正です")
+    return dict(SETS[kind]["starts"])
+
+
 def _number(value, label: str, low: float, high: float) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
         raise ValueError(f"{label}を数字で入れてください")
@@ -64,24 +86,29 @@ def normalize(value: dict) -> dict:
         return [round(float(v), 1) for v in raw]
 
     raw_pads = value.get("pads")
-    if not isinstance(raw_pads, dict) or set(str(k) for k in raw_pads) != set("12345678"):
-        raise ValueError("パッド1〜8をすべて登録してください")
-    pads = {str(i): point(raw_pads[str(i)], f"パッド{i}") for i in range(1, 9)}
-    for i in range(1, 9):
-        for j in range(i + 1, 9):
-            if math.dist(pads[str(i)], pads[str(j)]) < 20:
-                raise ValueError(f"パッド{i}と{j}が近すぎます")
-    # The user-defined pattern is 1 2 3 / 4 5 6 / 7 8. Distances may
-    # vary, but the numbered rows and left-to-right order must stay intact.
-    if not (pads["1"][0] < pads["2"][0] < pads["3"][0]
-            and pads["4"][0] < pads["5"][0] < pads["6"][0]
-            and pads["7"][0] < pads["8"][0]):
-        raise ValueError("パッド番号の左右の並びを確認してください")
-    if not (max(pads[str(i)][1] for i in (1, 2, 3)) + 15 <
-            min(pads[str(i)][1] for i in (4, 5, 6)) and
-            max(pads[str(i)][1] for i in (4, 5, 6)) + 15 <
-            min(pads[str(i)][1] for i in (7, 8))):
-        raise ValueError("パッド番号の奥から手前の並びを確認してください")
+    kind = pad_set(raw_pads) if isinstance(raw_pads, dict) else None
+    if kind is None:
+        raise ValueError("パッドは1〜8の8枚、または1〜4の4枚をすべて登録してください")
+    ids = SETS[kind]["ids"]
+    pads = {k: point(raw_pads[k], f"パッド{k}") for k in ids}
+    for n, a in enumerate(ids):
+        for b in ids[n + 1:]:
+            if math.dist(pads[a], pads[b]) < 20:
+                raise ValueError(f"パッド{a}と{b}が近すぎます")
+    # Distances may vary, but the numbered rows and left-to-right order must stay intact.
+    if kind == "pads8":  # 1 2 3 / 4 5 6 / 7 8
+        if not (pads["1"][0] < pads["2"][0] < pads["3"][0]
+                and pads["4"][0] < pads["5"][0] < pads["6"][0]
+                and pads["7"][0] < pads["8"][0]):
+            raise ValueError("パッド番号の左右の並びを確認してください")
+        if not (max(pads[i][1] for i in "123") + 15 < min(pads[i][1] for i in "456")
+                and max(pads[i][1] for i in "456") + 15 < min(pads[i][1] for i in "78")):
+            raise ValueError("パッド番号の奥から手前の並びを確認してください")
+    else:  # square4: 1 2 / 3 4
+        if not (pads["1"][0] < pads["2"][0] and pads["3"][0] < pads["4"][0]):
+            raise ValueError("パッド番号の左右の並びを確認してください")
+        if not max(pads[i][1] for i in "12") + 15 < min(pads[i][1] for i in "34"):
+            raise ValueError("パッド番号の奥から手前の並びを確認してください")
 
     field = point(value.get("field"), "飛行範囲", 4)
     x0, x1, y0, y1 = field
@@ -102,7 +129,7 @@ def normalize(value: dict) -> dict:
     for side, (x, y, _) in starts.items():
         if not (x0 + 20 <= x <= x1 - 20 and y0 + 20 <= y <= y1 - 20):
             raise ValueError(f"{side}の開始位置は飛行範囲の端から20cm以上離してください")
-    for side, pad in (("A", "4"), ("B", "6")):
+    for side, pad in SETS[kind]["starts"].items():
         if math.dist(starts[side][:2], pads[pad]) > 10:
             raise ValueError(f"{side}の開始位置はパッド{pad}の中心にしてください")
     result = {"pads": pads, "field": field, "starts": starts}

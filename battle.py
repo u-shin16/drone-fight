@@ -323,9 +323,12 @@ def plan_lines(kind: str, name: str) -> list[str]:
 class BattleRunner:
     """Takes off, runs the chosen mode (looped) or file (once) and reports airborne state."""
 
-    def __init__(self, tello_port: int = tello_net.TELLO_PORT, state_port: int = STATE_PORT) -> None:
+    def __init__(self, tello_port: int = tello_net.TELLO_PORT, state_port: int = STATE_PORT,
+                 monitor: "StateMonitor | None" = None) -> None:
         self.tello_port = tello_port
-        self.monitor = StateMonitor(state_port)
+        # Two drones on one PC share one monitor: the state port can only be bound once,
+        # and the packets are told apart by the drone's IP.
+        self.monitor = monitor or StateMonitor(state_port)
         self.lock = threading.Lock()
         self.opponent_height = lambda: None  # set by the app: opponent's latest height (cm)
         self.opponent_pos = lambda lead=0.0: None  # set by the app: opponent's pose {"x","y"} (cm)
@@ -513,9 +516,9 @@ class BattleRunner:
                 self._note(f"パッドなしモード。{self._plan_label()} を開始")
                 self._fly_plan()
                 return
-            # Take off over pad 4 (A) or pad 6 (B); verify the actual pad before
-            # any battle movement. A photo alone cannot confirm the real setup.
-            expected = 4 if self.role == "A" else 6
+            # Take off over our start pad (the pad the map puts our start on: 4 and 6 for
+            # eight pads, 3 and 4 for the square); verify the actual pad before any movement.
+            expected = min(PADS, key=lambda k: math.dist(PADS[k], STARTS[self.role][:2]))
             entered_at = time.monotonic()
             deadline = entered_at + 3
             confirmed = False

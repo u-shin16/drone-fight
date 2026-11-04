@@ -30,26 +30,38 @@
 </section>
 
 <section class="card" id="pads-card">
-  <h2>フィールドをスキャンする（最初に1回）</h2>
-  <p style="margin-top:0">自分のドローンがパッドの上を飛んで、8枚の位置を実際に測って地図を作ります。写真はいりません。</p>
-  <ol class="steps-list">
+  <div class="picker-head">
+    <h2>フィールドをスキャンする（最初に1回）</h2>
+    <div class="segment" role="tablist" aria-label="パッドの枚数">
+      <button role="tab" data-pads="4" class="on">4枚（正方形）</button>
+      <button role="tab" data-pads="8">8枚</button>
+    </div>
+  </div>
+  <p style="margin-top:0">自分のドローンがパッドの上を飛んで、<span class="pad-count">4</span>枚の位置を実際に測って地図を作ります。写真はいりません。</p>
+  <ol class="steps-list" data-for="4">
+    <li>パッドを<b>奥から「1 2 ／ 3 4」</b>の並びで、<b>数字の面を上</b>にして床に置く。パッド同士の間隔は100〜120cmが目安（正方形の大きさは測って把握します）。</li>
+    <li><b>ロケットの絵を4枚とも同じ向き</b>にそろえる（パッド3から4の方へ向く向き）。</li>
+    <li>自分のドローンを<b>パッド3の中心</b>に、<b>ロケットと同じ向き</b>で置く。相手のドローンはどかしておく（対戦のときはA機がパッド3、B機がパッド4）。</li>
+    <li>パッド3から測って、<b>壁・人・家具にぶつからずに飛べる距離</b>を下に入れる。この長方形の外には出ません。</li>
+  </ol>
+  <ol class="steps-list" data-for="8" hidden>
     <li>パッドを<b>奥から「1 2 3 ／ 4 5 6 ／ 7 8」</b>の並びで、<b>数字の面を上</b>にして床に置く。間隔は自由。</li>
     <li><b>ロケットの絵を8枚とも同じ向き</b>にそろえる（パッド4から6の方へ向く向き）。パッド4と6は<b>100cm以上</b>離す。</li>
-    <li>自分のドローンを<b>パッド4の中心</b>に、<b>ロケットと同じ向き</b>で置く。相手のドローンはどかしておく。</li>
+    <li>自分のドローンを<b>パッド4の中心</b>に、<b>ロケットと同じ向き</b>で置く。相手のドローンはどかしておく（対戦のときはA機がパッド4、B機がパッド6）。</li>
     <li>パッド4から測って、<b>壁・人・家具にぶつからずに飛べる距離</b>を下に入れる。この長方形の外には出ません。</li>
   </ol>
   <div class="bounds">
     <label>後ろ（ロケットと反対）<input id="b-back" type="number" min="50" max="600" step="10" placeholder="cm"></label>
     <label>前（ロケットの向き）<input id="b-front" type="number" min="50" max="600" step="10" placeholder="cm"></label>
-    <label>奥（パッド1〜3の側）<input id="b-far" type="number" min="50" max="600" step="10" placeholder="cm"></label>
-    <label>手前（パッド7・8の側）<input id="b-near" type="number" min="50" max="600" step="10" placeholder="cm"></label>
+    <label>奥（<span class="far-pads">パッド1・2</span>の側）<input id="b-far" type="number" min="50" max="600" step="10" placeholder="cm"></label>
+    <label>手前<span class="near-note">（パッドはありません。安全な余白）</span><input id="b-near" type="number" min="50" max="600" step="10" placeholder="cm"></label>
   </div>
   <div class="row" style="margin-top:14px">
     <button id="scan-start" class="big-button">スキャン開始（離陸します）</button>
     <button id="scan-stop" class="stop big-button" hidden>停止して着陸</button>
     <span class="msg" id="scan-msg"></span>
   </div>
-  <p class="muted" style="font-size:13px;margin:10px 0 0">高さ100cm・秒速40cmで、範囲の中を往復しながらパッドを読みます（広さに合わせて最大6分）。8枚とも2回以上見えて位置がそろい、最後にパッド4へ戻ったときのズレが30cm以内のときだけ保存します。どれか1つでもだめなら着陸して保存しません。電池50%以上が必要です。Escキーでも停止して着陸します。</p>
+  <p class="muted" style="font-size:13px;margin:10px 0 0">高さ100cm・秒速60cmで、範囲の中を往復しながらパッドを読みます。全部のパッドが2回以上見えて位置がそろったらすぐ終わり、スタートしたパッドへ戻ります。広さに合わせた時間の上限があり（最大6分）、戻ったときのズレが30cm以内のときだけ保存します。どれか1つでもだめなら着陸して保存しません。電池50%以上が必要です。Escキーでも停止して着陸します。</p>
 </section>
 
 <section class="card arena">

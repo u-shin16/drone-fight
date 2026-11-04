@@ -19,12 +19,14 @@ import arena
 import tello_net
 
 SCAN_HEIGHT = 100     # cm; the pads are readable from 30-120 cm
-SPEED = 40            # cm/s, slow so each step lands where it was sent
+SPEED = 60            # cm/s; 100 would overshoot, 40 made the scan slow
 STEP = 50             # cm per move between readings
 LANE = 60             # cm between sweep lanes (the camera sees about ±40 cm at 1 m)
 EDGE = 30             # cm kept clear of the declared boundary
-SETTLE = 0.6          # s hovering before a reading is taken
+SETTLE = 0.4          # s hovering to take a reading when a pad is in view
+SETTLE_EMPTY = 0.25   # s hovering before giving up on a stop with no pad in view
 MIN_SEEN = 2          # separate stops at which every pad must be seen
+DONE_SPREAD = 15      # cm: sightings this close ends the sweep early (the saved map allows MAX_SPREAD)
 MAX_SPREAD = 25       # cm: a pad's sightings must agree this well
 MAX_CLOSURE = 30      # cm: back over pad 4, our tracked position may be this far off
 MAX_YAW = 20          # degrees away from the rockets before we give up
@@ -47,15 +49,36 @@ def boundary(back: float, front: float, far: float, near: float) -> tuple[float,
     return (-float(back), float(front), -float(far), float(near))
 
 
-def route(field: tuple) -> list[tuple[float, float]]:
-    """Lawn-mower lanes across the field, keeping EDGE clear of its sides."""
+def lanes(y_min: float, y_max: float, upper: float | None = None) -> list[float]:
+    """Sweep lines: the origin pad's own row (y = 0), then outward, LANE apart.
+
+    With eight pads, the pads of the far row (1-3) and the near row (7-8) lie on
+    both sides of the start row, so lanes alternate sides; working outward finds
+    them all without flying to the far edge of a roomy boundary. 'upper' cuts off
+    the near side when no pad can be there (the 4-pad square has none).
+    """
+    low, high = y_min + EDGE, y_max - EDGE
+    if upper is not None:
+        high = min(high, upper)
+    found = [k * LANE for k in range(-int(abs(low) // LANE), int(max(high, 0) // LANE) + 1) if low <= k * LANE <= high]
+    if not found:
+        return [(low + high) / 2]
+    # A boundary edge farther than half a lane from the nearest sweep line still needs one.
+    for edge in (low, high):
+        if min(abs(edge - y) for y in found) > LANE / 1.5:
+            found.append(edge)
+    return sorted(found, key=lambda y: (abs(y), y))
+
+
+def route(field: tuple, kind: str = "pads8") -> list[tuple[float, float]]:
+    """Back-and-forth sweeps, starting along the start row, keeping EDGE clear of the boundary."""
     x_min, x_max, y_min, y_max = field
     xs = _ticks(x_min + EDGE, x_max - EDGE, STEP)
-    ys = _ticks(y_min + EDGE, y_max - EDGE, LANE)
     points = []
-    for i, y in enumerate(ys):
-        lane = xs if i % 2 == 0 else list(reversed(xs))
-        points += [(x, y) for x in lane]
+    # The 4-pad square 1 2 / 3 4 has nothing on the near side of the start row.
+    for i, y in enumerate(lanes(y_min, y_max, upper=0 if kind == "square4" else None)):
+        sweep = xs if i % 2 == 0 else list(reversed(xs))
+        points += [(x, y) for x in sweep]
     return points
 
 
@@ -76,11 +99,15 @@ def hops(start: tuple[float, float], end: tuple[float, float], step: float = STE
 class PadMap:
     """Every sighting of every pad, and where that puts its centre."""
 
-    def __init__(self) -> None:
-        self.sightings: dict[int, list[tuple[float, float]]] = {k: [] for k in range(1, 9)}
+    def __init__(self, kind: str = "pads8") -> None:
+        self.kind = kind
+        self.ids = tuple(int(k) for k in arena.SETS[kind]["ids"])
+        # The pad that A takes off from is the origin of the map.
+        self.origin = int(arena.SETS[kind]["starts"]["A"])
+        self.sightings: dict[int, list[tuple[float, float]]] = {k: [] for k in self.ids}
 
     def center(self, pad: int) -> tuple[float, float] | None:
-        if pad == 4:
+        if pad == self.origin:
             return (0.0, 0.0)  # the origin, by definition
         seen = self.sightings[pad]
         if not seen:
@@ -106,33 +133,41 @@ class PadMap:
         cx, cy = self.center(pad)
         return max(math.hypot(p[0] - cx, p[1] - cy) for p in seen)
 
+    def solid(self, pad: int) -> bool:
+        """Seen from enough separate stops, in places that agree (the origin pad is 0,0 by definition)."""
+        if len(self.sightings[pad]) < MIN_SEEN:
+            return False
+        return pad == self.origin or self.spread(pad) <= DONE_SPREAD
+
     def done(self) -> bool:
-        return all(len(self.sightings[k]) >= MIN_SEEN + 1 for k in range(1, 9))
+        return all(self.solid(k) for k in self.ids)
 
     def summary(self) -> dict:
         return {str(k): {"center": [round(v, 1) for v in self.center(k)] if self.center(k) else None,
                          "seen": len(self.sightings[k]), "spread": round(self.spread(k), 1)}
-                for k in range(1, 9)}
+                for k in self.ids}
 
 
 def build_layout(pads: PadMap, field: tuple, closure: float | None) -> dict:
     """The arena from a finished scan, or ValueError saying why it cannot be trusted."""
-    missing = [str(k) for k in range(1, 9) if not pads.sightings[k]]
+    ids, origin = pads.ids, pads.origin
+    missing = [str(k) for k in ids if not pads.sightings[k]]
     if missing:
         raise ValueError(f"パッド{'・'.join(missing)}が見つかりませんでした")
-    few = [str(k) for k in range(1, 9) if len(pads.sightings[k]) < MIN_SEEN]
+    few = [str(k) for k in ids if len(pads.sightings[k]) < MIN_SEEN]
     if few:
         raise ValueError(f"パッド{'・'.join(few)}は見えた回数が足りません（{MIN_SEEN}回以上必要）")
-    for k in range(1, 9):
+    for k in ids:
         if pads.spread(k) > MAX_SPREAD:
             raise ValueError(f"パッド{k}の位置が安定しません（ズレ{pads.spread(k):.0f}cm、{MAX_SPREAD}cmまで）")
     if closure is None:
-        raise ValueError("最後にパッド4へ戻って確認できませんでした")
+        raise ValueError(f"最後にパッド{origin}へ戻って確認できませんでした")
     if closure > MAX_CLOSURE:
-        raise ValueError(f"1周してパッド4に戻ったときのズレが{closure:.0f}cmでした（{MAX_CLOSURE}cmまで）")
-    centers = {str(k): [round(c, 1) for c in pads.center(k)] for k in range(1, 9)}
+        raise ValueError(f"1周してパッド{origin}に戻ったときのズレが{closure:.0f}cmでした（{MAX_CLOSURE}cmまで）")
+    centers = {str(k): [round(c, 1) for c in pads.center(k)] for k in ids}
+    b_pad = arena.SETS[pads.kind]["starts"]["B"]
     return arena.normalize({"pads": centers, "field": list(field),
-                            "starts": {"A": [*centers["4"], 0], "B": [*centers["6"], 180]},
+                            "starts": {"A": [*centers[str(origin)], 0], "B": [*centers[b_pad], 180]},
                             "scanned_at": tello_net.now()})
 
 
@@ -154,6 +189,7 @@ class ArenaScanner:
         self.message = ""
         self.ip: str | None = None
         self.field: tuple | None = None
+        self.kind = "pads8"
         self.pads = PadMap()
         self.pose = (0.0, 0.0)
         self.closure: float | None = None
@@ -170,16 +206,23 @@ class ArenaScanner:
     def active(self) -> bool:
         return self.phase == "running"
 
-    def start(self, ip: str, field: tuple, on_success) -> str | None:
-        """Begin a scan; returns an error message instead if it cannot start."""
+    def start(self, ip: str, field: tuple, on_success, kind: str = "pads8") -> str | None:
+        """Begin a scan of the 8-pad ('pads8') or 4-pad square ('square4') field.
+
+        Returns an error message instead if it cannot start.
+        """
         with self.lock:
             if self.active:
                 return "スキャン中です"
+            if kind not in arena.SETS:
+                return "パッドの枚数は4枚か8枚にしてください"
             if not self.monitor.listening:
                 return "高さやパッドの情報を受け取れません（8890番が使用中）"
             self._clear()
+            self.kind = kind
+            self.pads = PadMap(kind)
             self.phase, self.ip, self.field = "running", ip, field
-            self.stops_total = len(route(field))
+            self.stops_total = len(route(field, kind))
             # Sweep, revisits and the trip home, with room to spare; never more than TIME_LIMIT.
             self.time_limit = min(TIME_LIMIT, 90 + SECONDS_PER_STOP * self.stops_total)
             self.started = time.monotonic()
@@ -191,6 +234,7 @@ class ArenaScanner:
 
     def status(self) -> dict:
         return {"phase": self.phase, "message": self.message, "log": self.log[-10:],
+                "kind": self.kind, "origin": self.pads.origin,
                 "pads": self.pads.summary(), "pose": [round(v) for v in self.pose],
                 "field": list(self.field) if self.field else None,
                 "progress": [self.stops_done, self.stops_total], "time_limit": round(self.time_limit),
@@ -236,12 +280,17 @@ class ArenaScanner:
         if battery and str(battery).isdigit() and int(battery) < LOW_BATTERY:
             raise ScanAbort(f"電池が{LOW_BATTERY}%未満になりました")
         yaw = reading.get("pad_yaw")
-        if reading.get("mid") in range(1, 9) and yaw is not None and abs(yaw) > MAX_YAW:
+        if reading.get("mid") in self.pads.ids and yaw is not None and abs(yaw) > MAX_YAW:
             raise ScanAbort(f"機体の向きがロケットから{abs(yaw)}°ずれました（{MAX_YAW}°まで）")
 
     def _look(self) -> tuple[int, tuple[float, float]] | None:
-        """Hover a moment, then the pad most seen and our median offset from its centre."""
-        end = time.monotonic() + SETTLE
+        """Hover briefly, then the pad most seen and our median offset from its centre.
+
+        A stop with nothing in view is left after SETTLE_EMPTY; once a pad shows up we
+        stay for SETTLE so the median is taken over several readings.
+        """
+        began = time.monotonic()
+        end = began + SETTLE_EMPTY
         seen: dict[int, list[tuple[int, int]]] = {}
         last = None
         while time.monotonic() < end:
@@ -250,8 +299,9 @@ class ArenaScanner:
             if reading["at"] != last:
                 last = reading["at"]
                 pad = reading.get("mid")
-                if pad in range(1, 9) and reading.get("x") is not None and reading.get("y") is not None:
+                if pad in self.pads.ids and reading.get("x") is not None and reading.get("y") is not None:
                     seen.setdefault(pad, []).append((reading["x"], reading["y"]))
+                    end = max(end, began + SETTLE)
             time.sleep(0.05)
         if not seen:
             return None
@@ -290,7 +340,7 @@ class ArenaScanner:
             self._land()
             layout = build_layout(self.pads, self.field, self.closure)
             on_success(layout)
-            self.phase, self.message = "done", "8枚の地図を保存しました"
+            self.phase, self.message = "done", f"{len(self.pads.ids)}枚の地図を保存しました"
             self._note(self.message)
         except (ScanAbort, ValueError) as exc:
             self.phase, self.message = "failed", f"{exc}。地図は保存していません"
@@ -315,7 +365,8 @@ class ArenaScanner:
             raise ScanAbort("ミッションパッドの検出をオンにできませんでした")
         if self.stop_event.is_set():
             raise ScanAbort("停止ボタンで中止しました")
-        self._note(f"パッド4から離陸します（電池 {battery}%）")
+        origin = self.pads.origin
+        self._note(f"パッド{origin}から離陸します（電池 {battery}%）")
         self.airborne = True
         if self._send("takeoff", 20) != "ok":
             raise ScanAbort("離陸できませんでした")
@@ -324,47 +375,50 @@ class ArenaScanner:
             self._send(f"up {round(SCAN_HEIGHT - height)}", 10)
         self._send(f"speed {SPEED}", 5)
         start = self._look()
-        if not start or start[0] != 4:
+        if not start or start[0] != origin:
             seen = f"パッド{start[0]}" if start else "パッドなし"
-            raise ScanAbort(f"離陸した場所でパッド4が見えません（{seen}）。パッド4の中心から離陸してください")
-        self.pose = self.pads.observe(4, start[1], (0.0, 0.0))
-        self._note("パッド4を確認。スキャンを始めます")
+            raise ScanAbort(f"離陸した場所でパッド{origin}が見えません（{seen}）。"
+                            f"パッド{origin}の中心から離陸してください")
+        self.pose = self.pads.observe(origin, start[1], (0.0, 0.0))
+        self._note(f"パッド{origin}を確認。スキャンを始めます")
 
-        for point in route(self.field):
+        for point in route(self.field, self.kind):
             self._go_to(point)
             self.stops_done += 1
             if self.pads.done():
-                self._note("8枚とも十分に見えたので、パッド4へ戻ります")
+                self._note(f"{len(self.pads.ids)}枚とも十分に見えたので、パッド{origin}へ戻ります")
                 break
         self._revisit()
-        # Back to pad 4, reading pads on the way. How far our tracked position is
-        # from pad 4 when we get there shows whether the map can be trusted.
+        # Back to the origin pad, reading pads on the way. How far our tracked position is
+        # from it when we get there shows whether the map can be trusted.
         for dx, dy in hops(self.pose, (0.0, 0.0)):
             self._hop(dx, dy)
             if self.pose != (0.0, 0.0):
                 self._take_reading()
         tracked = self.pose
         sighting = self._look()
-        if sighting and sighting[0] == 4:
+        if sighting and sighting[0] == origin:
             offset = sighting[1]
             self.closure = math.hypot(tracked[0] - offset[0], tracked[1] - offset[1])
-            self.pose = offset  # pad 4 is the origin: this is exactly where we are
-            self._note(f"パッド4に戻りました（1周のズレ {self.closure:.0f}cm）")
+            self.pose = offset  # the origin pad is (0, 0): this is exactly where we are
+            self._note(f"パッド{origin}に戻りました（1周のズレ {self.closure:.0f}cm）")
         else:
-            self._note("戻った場所でパッド4が見えませんでした")
+            self._note(f"戻った場所でパッド{origin}が見えませんでした")
 
     def _go_to(self, point: tuple[float, float]) -> None:
+        # Look after every hop, not only at the end: a long way (changing sweep lane,
+        # fetching a pad again) passes pads, and each one seen corrects the drift.
         for dx, dy in hops(self.pose, point):
             self._hop(dx, dy)
-        self._take_reading()
+            self._take_reading()
 
     def _revisit(self) -> None:
         """Fly back over pads seen too few times, so each is measured from more than one stop."""
         x_min, x_max, y_min, y_max = self.field
-        for pad in range(1, 9):
+        for pad in self.pads.ids:
             for nudge in ((0, 0), (15, 0), (0, 15)):
                 center = self.pads.center(pad)
-                if center is None or len(self.pads.sightings[pad]) >= MIN_SEEN + 1:
+                if center is None or self.pads.solid(pad):
                     break
                 target = (min(max(center[0] + nudge[0], x_min + EDGE), x_max - EDGE),
                           min(max(center[1] + nudge[1], y_min + EDGE), y_max - EDGE))

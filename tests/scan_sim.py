@@ -8,6 +8,7 @@ argv: scenario [index]
   stop       the stop button is pressed mid-scan
   start5     the drone is put on pad 5 instead of pad 4
   yaw        the body slowly turns away from the rockets
+  square4    four pads in a square, 1 2 / 3 4, taking off from pad 3
 The fake world puts pad 4 away from (0, 0) so the "relative to pad 4" maths is tested too.
 """
 import json, math, os, subprocess, sys, tempfile, time, urllib.request
@@ -18,10 +19,13 @@ index = int(sys.argv[2]) if len(sys.argv) > 2 else 0
 APP = Path(__file__).resolve().parents[1]
 PY = sys.executable
 SP = Path(tempfile.mkdtemp(prefix=f"tello-scan-{scenario}-"))
-PAD4 = (37.0, -12.0)
+SQUARE = scenario == "square4"
+PAD4 = (37.0, -12.0)  # where the origin pad is (pad 3 for the square)
 # 1 2 3 / 4 5 6 / 7 8, irregular, relative to pad 4.
 RELATIVE = {1: (-40, -110), 2: (60, -120), 3: (170, -100), 4: (0, 0),
             5: (90, 10), 6: (180, 5), 7: (30, 115), 8: (150, 120)}
+if SQUARE:
+    RELATIVE = {1: (-3, -90), 2: (118, -85), 3: (0, 0), 4: (120, 5)}
 world = {str(k): [PAD4[0] + x, PAD4[1] + y] for k, (x, y) in RELATIVE.items()
          if not (scenario == "missing7" and k == 7)}
 (SP / "world.json").write_text(json.dumps({"pads": world}))
@@ -56,7 +60,7 @@ try:
     sn = call("/api/state")["drones"][0]["sn"]
     assert call("/api/claim", {"sn": sn})["ok"]
     began = time.time()
-    reply = call("/api/arena/scan", {"back": 80, "front": 260, "far": 170, "near": 180})
+    reply = call("/api/arena/scan", {"pads": 4 if SQUARE else 8, "back": 80, "front": 260, "far": 170, "near": 180})
     assert reply["ok"], reply
     stopped = False
     while True:
