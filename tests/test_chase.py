@@ -19,10 +19,19 @@ class Monitor:
         self.latest = {"1.2.3.4": {"at": time.monotonic(), "raw": state}}
 
 
+class StubCamera:
+    on = True
+    frame = None
+
+    def start(self):
+        self.on = True
+
+
 class StubFlight:
     def __init__(self, state):
         self.ip, self.airborne, self.sent, self.landed = "1.2.3.4", True, [], False
         self.monitor = Monitor(state)
+        self.camera = StubCamera()
 
     def raw(self, command):
         self.sent.append(command)
@@ -46,8 +55,7 @@ class ChaseTest(unittest.TestCase):
     def run_chase(self, frame, loops=25):
         flight = StubFlight({"pitch": 0, "roll": 0, "yaw": 0, "h": 80, "tof": 80, "bat": 15})
         drone = EduDrone(flight)
-        drone._video_on = True
-        drone._frame = frame
+        flight.camera.frame = frame
         settings = load_settings()
         session = AutoBattleSession(drone=drone, settings=settings, profile=profile_from_settings(settings),
                                     config=AutoBattleConfig(loop_hz=200, max_loops=loops, marker="green"),

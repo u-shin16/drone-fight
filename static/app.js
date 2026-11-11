@@ -622,6 +622,17 @@ function renderFly(s) {
   $("fly-land").hidden = !up;
   $("fly-emergency").hidden = !up;
   $("fly-pad").hidden = !up;
+  $("fly-cam").hidden = !up;
+  const img = $("fly-video");
+  if (up && f.phase === "flying" && !img.dataset.on) {  // the stream only exists while flying
+    img.dataset.on = "1";
+    img.onload = () => { $("fly-video-wait").hidden = true; };
+    img.src = "/api/fly/video?t=" + Date.now();
+  } else if (!up && img.dataset.on) {
+    delete img.dataset.on;
+    img.removeAttribute("src");
+    $("fly-video-wait").hidden = false;
+  }
   $("fly-top-msg").textContent = !s.my_drone ? "先に「1. ドローンを探す」で自分の機体を選んでください" : f.message;
   $("fly-top-msg").className = f.phase === "done" && f.message !== "着陸しました" ? "msg error" : "msg";
   for (const b of document.querySelectorAll("#fly-pad [data-c]")) b.disabled = f.phase !== "flying" || f.moving || f.chasing;

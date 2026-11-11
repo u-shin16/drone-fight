@@ -13,6 +13,14 @@
   <p class="muted" style="font-size:13px;margin:10px 0 0">離陸の前に、周りに人や物がないか確認してください。Escキーで着陸します。電池20%未満では離陸せず、12%未満になるか9分たつと自動で着陸します。</p>
 </section>
 
+<section class="card" id="fly-cam" hidden>
+  <h2>カメラ</h2>
+  <div style="position:relative;max-width:640px;background:#111;border-radius:8px;min-height:120px">
+    <img id="fly-video" alt="ドローンのカメラ" style="display:block;width:100%;border-radius:8px">
+    <p class="muted" id="fly-video-wait" style="position:absolute;inset:0;margin:0;display:flex;align-items:center;justify-content:center;color:#aaa">映像を待っています…</p>
+  </div>
+</section>
+
 <section class="card" id="fly-pad" hidden>
   <h2>操作</h2>
   <div class="row" style="margin-bottom:14px">

@@ -40,6 +40,9 @@ try:
         if call("/api/state")["fly"]["phase"] == "flying": break
         time.sleep(0.2)
     f = call("/api/state")["fly"]; assert f["phase"] == "flying", f
+    for _ in range(50):  # the fake writes its true state every 50 ms
+        if truth()["flying"]: break
+        time.sleep(0.1)
     assert truth()["flying"]
     assert call("/api/fly/start", {})["ok"] is False  # already flying
     assert call("/api/arena/scan/walk", {})["ok"] is False  # the drone is in use

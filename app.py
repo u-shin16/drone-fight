@@ -13,7 +13,7 @@ import threading
 import time
 from pathlib import Path
 
-from flask import Flask, abort, jsonify, render_template, request
+from flask import Flask, Response, abort, jsonify, render_template, request
 
 import battle
 import freefly
@@ -214,6 +214,20 @@ def api_fly_start():
         return jsonify(ok=False, message="自分のドローンがわかりません。「1. ドローンを探す」で自分の機体にしてください")
     message = flyer.start(ip)
     return jsonify(ok=message is None, message=message)
+
+
+@app.get("/api/fly/video")
+def api_fly_video():
+    """The drone's camera as a motion-JPEG stream (an <img> shows it)."""
+    def frames():
+        last = None
+        while flyer.busy():
+            data = flyer.camera.jpeg()
+            if data is not None and data != last:
+                last = data
+                yield b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %d\r\n\r\n" % len(data) + data + b"\r\n"
+            time.sleep(0.05)
+    return Response(frames(), mimetype="multipart/x-mixed-replace; boundary=frame")
 
 
 @app.post("/api/fly/chase")

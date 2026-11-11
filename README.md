@@ -71,3 +71,6 @@ Telloは最初に `command` を送ったPCにしか返事をしないので、2�
 
 ## 緑を追いかける（操縦ページ）
 友だちの attack-drn（https://github.com/jpsarchgac-blip/attack-drn ）の `tello_edu/battle/` と `config/battle_settings.yaml` をそのまま `tello_edu/`・`config/` に置くと、「操縦」ページに「緑を追いかける」「離陸して緑を追う」が使えます。他人のコード（ライセンス記載なし）なのでこのリポジトリには入れていません（.gitignore）。元の `EduDrone` は djitellopy で8889・8890番を自分で開いてこのアプリとぶつかるため、`tello_edu/session/edu_drone.py` だけ、開いているソケットとモニターを使う版に置きかえています。追跡中は安全制御（電池・高さ・傾きでの自動着陸）を設定ファイルの値で外してあり（元の値はコメントに残してあります）、やめると着陸します。`tests/test_chase.py` は合成画像で、緑に向かって前進・回って探す・着陸を確認します。
+
+## カメラ映像（操縦ページ）
+離陸すると前のカメラ（`streamon`、UDP 11111番、OpenCVで読む）を映して、操縦ページの「カメラ」に出します（`camera.py`、MJPEG配信 `/api/fly/video`）。「緑を追いかける」の間は、追跡が緑に付けた枠と数字つきの画像が映ります。`python3 -m unittest discover -s tests` の test_camera.py で、画像のJPEG化と配信の形を確認しています。

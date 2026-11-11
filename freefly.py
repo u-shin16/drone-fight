@@ -9,6 +9,7 @@ import queue
 import threading
 import time
 
+import camera
 import tello_net
 
 MIN_BATTERY = 20
@@ -28,6 +29,7 @@ class FreeFlight:
         self.tello_port = tello_port
         self.lock = threading.Lock()
         self.sock = None
+        self.camera = camera.Camera()
         self._idle()
 
     def _idle(self) -> None:
@@ -203,12 +205,15 @@ class FreeFlight:
                 self._send("land", 8)
                 return self._finish("離陸できませんでした")
             self.phase = "flying"
+            self._send("streamon", 5)  # the front camera, shown on the page
+            self.camera.start()
             self.message = "飛んでいます。矢印キーかボタンで動かせます"
             self._note("離陸しました")
             self._loop()
         finally:
             if self.airborne and not self.cut:
                 self._land()
+            self.camera.stop()
             sock, self.sock = self.sock, None
             if sock:
                 sock.close()
@@ -229,7 +234,8 @@ class FreeFlight:
             session = AutoBattleSession(
                 drone=drone, settings=settings, profile=profile_from_settings(settings),
                 config=AutoBattleConfig(marker=marker, stop_event=self._chase_stop),
-                frame_source=drone.read_frame)
+                frame_source=drone.read_frame, frame_sink=self.camera.show,  # the page sees what it sees
+                keep_video_alive=True)
             result = session.run()
             reason = f"（{result.get('reason')}）" if result.get("reason") else ""
             self.chase_message = f"追跡が終わりました: {result.get('status')}{reason}"
@@ -237,6 +243,7 @@ class FreeFlight:
             self.chase_message = f"追跡に失敗しました: {exc}"
         finally:
             self.chasing = False
+            self.camera.clear_overlay()
             self._note(self.chase_message)
             if self.airborne and not self.cut:
                 self._raw("rc 0 0 0 0")
