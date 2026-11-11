@@ -429,6 +429,15 @@ def api_claim():
     return jsonify(ok=True)
 
 
+@app.post("/api/unclaim")
+def api_unclaim():
+    """Let go of the B drone (pressing "B機 ✓" again)."""
+    if state["local"] or state["ready"] or state["start_at"] or runner2.phase in ("starting", "flying"):
+        return jsonify(ok=False, message="1台モードのマッチ中・バトル中は外せません")
+    tello_net.save_settings(drone_sn_b="")
+    return jsonify(ok=True)
+
+
 @app.post("/api/unmatch")
 def api_unmatch():
     if runner.phase in ("starting", "flying"):

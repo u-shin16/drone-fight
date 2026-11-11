@@ -48,6 +48,17 @@ class LocalModeTest(unittest.TestCase):
         tello_app.state.update(matching=False, ready=False, local=False, start_at=None, result=None,
                                plan=None, plan_b=None)
 
+    def test_pressing_b_again_lets_the_b_drone_go(self):
+        self.assertTrue(post(self.client, "/api/claim", {"sn": "SN-B", "slot": "B"})["ok"])
+        self.assertEqual(get(self.client, "/api/state")["my_drone_b"]["sn"], "SN-B")
+        self.assertTrue(post(self.client, "/api/unclaim", {"slot": "B"})["ok"])
+        self.assertIsNone(get(self.client, "/api/state")["my_drone_b"])
+        self.assertTrue(post(self.client, "/api/claim", {"sn": "SN-B", "slot": "B"})["ok"])  # and it can be chosen again
+        tello_app.state["local"] = True  # not while the one-PC match is on
+        self.assertFalse(post(self.client, "/api/unclaim", {"slot": "B"})["ok"])
+        self.assertEqual(get(self.client, "/api/state")["my_drone_b"]["sn"], "SN-B")
+        tello_net.save_settings(drone_sn_b="")
+
     def test_needs_two_different_drones(self):
         self.assertFalse(post(self.client, "/api/match", {"local": True, "sn": "SN-A", "sn_b": ""})["ok"])
         self.assertFalse(post(self.client, "/api/match", {"local": True, "sn": "SN-A", "sn_b": "SN-A"})["ok"])

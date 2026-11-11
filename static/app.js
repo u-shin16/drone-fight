@@ -77,16 +77,16 @@ function renderDrones(s) {
     });
     const isB = s.my_drone_b && s.my_drone_b.sn === d.sn;
     const claimB = tr.querySelector(".claim-b");
-    claimB.textContent = isB ? "B機 ✓" : "B機にする";
+    claimB.textContent = isB ? "B機 ✓（もう一度押すと解除）" : "B機にする";
     claimB.className = isB ? "claim-b" : "ghost claim-b";
     claimB.title = "1台のPCで2台を動かすときの、2台目の機体";
     claimB.addEventListener("click", async () => {
-      claimB.textContent = "つないでいます…";
+      claimB.textContent = isB ? "解除しています…" : "つないでいます…";
       claimB.disabled = true;
       editing = true;
-      const r = await post("/api/claim", { sn: d.sn, slot: "B" });
+      const r = isB ? await post("/api/unclaim", { slot: "B" }) : await post("/api/claim", { sn: d.sn, slot: "B" });
       saved.className = r.ok ? "saved muted" : "saved error";
-      saved.textContent = r.ok ? "B機につなぎました ✓" : r.message;
+      saved.textContent = r.ok ? (isB ? "B機を解除しました ✓" : "B機につなぎました ✓") : r.message;
       setTimeout(() => { editing = false; refresh(); }, r.ok ? 800 : 6000);
     });
     $("drones").appendChild(tr);
