@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h2>選んだドローンを自分で操縦する</h2>
+  <p style="margin-top:0">バトルやスキャンとは関係なく、「1. ドローンを探す」で選んだ自分の機体を飛ばします。離陸すると、その場でホバリングして、矢印キー（またはボタン）で少しずつ動かせます。下向きカメラがミッションパッドを読むと、下に表示します。</p>
+  <div class="row">
+    <button id="fly-start" class="big-button">離陸する</button>
+    <button id="fly-land" class="big-button" hidden>着陸</button>
+    <button id="fly-emergency" class="stop big-button" hidden>緊急停止（落ちます）</button>
+    <span class="msg" id="fly-top-msg"></span>
+  </div>
+  <p class="muted" style="font-size:13px;margin:10px 0 0">離陸の前に、周りに人や物がないか確認してください。Escキーで着陸します。電池20%未満では離陸せず、12%未満になるか9分たつと自動で着陸します。</p>
+</section>
+
+<section class="card" id="fly-pad" hidden>
+  <h2>操作</h2>
+  <div class="row" style="align-items:center;gap:32px;flex-wrap:wrap">
+    <div>
+      <div class="dpad" style="display:grid;grid-template-columns:repeat(3,72px);grid-template-rows:repeat(3,48px);gap:6px">
+        <span></span><button class="ghost" data-c="forward" title="前へ（↑ / W）">↑ 前</button><span></span>
+        <button class="ghost" data-c="left" title="左へ（← / A）">← 左</button><span></span><button class="ghost" data-c="right" title="右へ（→ / D）">右 →</button>
+        <span></span><button class="ghost" data-c="back" title="後ろへ（↓ / S）">↓ 後ろ</button><span></span>
+      </div>
+      <p class="muted" style="font-size:13px;margin:6px 0 0">矢印キー or W A S D</p>
+    </div>
+    <div>
+      <div style="display:grid;grid-template-columns:repeat(2,96px);gap:6px">
+        <button class="ghost" data-c="up" title="上へ（R）">上へ（R）</button>
+        <button class="ghost" data-c="down" title="下へ（F）">下へ（F）</button>
+        <button class="ghost" data-c="ccw" title="左に回る（Q）">⟲ 左回り（Q）</button>
+        <button class="ghost" data-c="cw" title="右に回る（E）">右回り ⟳（E）</button>
+      </div>
+    </div>
+    <div>
+      <label>1回で動く量
+        <select id="fly-amount"><option value="20">小（20cm・15°）</option><option value="40" selected>中（40cm・45°）</option><option value="80">大（80cm・90°）</option></select>
+      </label>
+      <p class="muted" id="fly-info" style="margin:8px 0 0"></p>
+      <p class="error" id="fly-msg" style="margin:4px 0 0"></p>
+    </div>
+  </div>
+</section>
+
+<section class="card">
+  <details open>
+    <summary class="muted">記録</summary>
+    <pre class="mono muted" id="fly-log" style="white-space:pre-wrap;margin:8px 0 0"></pre>
+  </details>
+</section>
+{% endblock %}

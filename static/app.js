@@ -610,6 +610,24 @@ function renderBattle(s) {
 
 let started = false;  // no screen updates until a reload's reset has finished
 
+function renderFly(s) {
+  const f = s.fly;
+  const up = f.phase === "starting" || f.phase === "flying" || f.phase === "landing";
+  $("fly-start").hidden = up;
+  $("fly-land").hidden = !up;
+  $("fly-emergency").hidden = !up;
+  $("fly-pad").hidden = !up;
+  $("fly-top-msg").textContent = !s.my_drone ? "先に「1. ドローンを探す」で自分の機体を選んでください" : f.message;
+  $("fly-top-msg").className = f.phase === "done" && f.message !== "着陸しました" ? "msg error" : "msg";
+  for (const b of document.querySelectorAll("#fly-pad [data-c]")) b.disabled = f.phase !== "flying" || f.moving;
+  const lv = f.live;
+  const pad = lv && lv.mid > 0 ? `パッド${lv.mid}が見えています（前${lv.x}・横${lv.y}・高さ${lv.z}cm）` : "パッドは見えていません";
+  $("fly-info").textContent = (f.moving ? "動いています… ／ " : "") + pad +
+    (lv && lv.h != null ? ` ／ 高さ${lv.h}cm` : "") + (lv && lv.bat ? ` ／ 電池${lv.bat}%` : "") +
+    (up ? ` ／ ${f.elapsed}秒（${f.limit}秒まで）` : "");
+  $("fly-log").textContent = f.log.join("\n");
+}
+
 async function refresh() {
   if (!started) return;
   let s;
@@ -619,8 +637,37 @@ async function refresh() {
   if (page === "peers") renderPeers(s);
   if (page === "battle") renderBattle(s);
   if (page === "field") renderField(s);
+  if (page === "fly") renderFly(s);
 }
 
+if (page === "fly") {
+  const FLY_KEYS = { ArrowUp: "forward", ArrowDown: "back", ArrowLeft: "left", ArrowRight: "right",
+    w: "forward", s: "back", a: "left", d: "right", r: "up", f: "down", q: "ccw", e: "cw" };
+  const fly = async (cmd) => {
+    const amount = Number($("fly-amount").value);
+    const n = cmd === "cw" || cmd === "ccw" ? Math.round(amount * (amount === 20 ? 0.75 : amount === 40 ? 1.125 : 1.125)) : amount;
+    const r = await post("/api/fly/move", { cmd, n });
+    $("fly-msg").textContent = r.ok ? "" : r.message;
+    refresh();
+  };
+  for (const b of document.querySelectorAll("#fly-pad [data-c]")) b.addEventListener("click", () => fly(b.dataset.c));
+  document.addEventListener("keydown", (e) => {
+    if ($("fly-pad").hidden || ["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement.tagName)) return;
+    if (e.key === "Escape") { post("/api/fly/land").then(refresh); return; }
+    const cmd = FLY_KEYS[e.key.length === 1 ? e.key.toLowerCase() : e.key];
+    if (!cmd) return;
+    e.preventDefault();
+    fly(cmd);
+  });
+  $("fly-start").addEventListener("click", async () => {
+    if (!confirm("離陸します。周りに人や物がないか確認しましたか？")) return;
+    const r = await post("/api/fly/start");
+    $("fly-top-msg").textContent = r.ok ? "離陸します…" : r.message;
+    refresh();
+  });
+  $("fly-land").addEventListener("click", () => post("/api/fly/land").then(refresh));
+  $("fly-emergency").addEventListener("click", () => post("/api/fly/emergency").then(refresh));
+}
 if (page === "drones") {
   $("scan").addEventListener("click", async () => { await post("/api/scan"); refresh(); });
 }

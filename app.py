@@ -16,6 +16,7 @@ from pathlib import Path
 from flask import Flask, abort, jsonify, render_template, request
 
 import battle
+import freefly
 import scan
 import arena
 import plans
@@ -44,6 +45,7 @@ def opponent_height() -> int | None:
 
 
 scanner = scan.ArenaScanner(runner.monitor, runner.tello_port)
+flyer = freefly.FreeFlight(runner.monitor, runner.tello_port)
 runner.opponent_height = opponent_height
 
 
@@ -75,6 +77,7 @@ runner2.opponent_raw = lambda: (runner.public().get("pos"), 0.0)
 # Closing the app must never leave a drone flying.
 atexit.register(runner.shutdown)
 atexit.register(runner2.shutdown)
+atexit.register(flyer.shutdown)
 lock = threading.Lock()
 
 
@@ -186,6 +189,52 @@ def api_plans_delete():
     return jsonify(ok=plans.delete_plan(name))
 
 
+@app.get("/fly")
+def fly_page():
+    return render_template("fly.html", page="fly")
+
+
+def drone_busy() -> str | None:
+    if runner.phase in ("starting", "flying") or runner2.phase in ("starting", "flying"):
+        return "バトル中です"
+    if scanner.active:
+        return "フィールドのスキャン中です"
+    return None
+
+
+@app.post("/api/fly/start")
+def api_fly_start():
+    if state["ready"] or state["start_at"]:
+        return jsonify(ok=False, message="準備OK・バトル中は操縦できません")
+    why = drone_busy()
+    if why:
+        return jsonify(ok=False, message=why)
+    ip = (my_drone() or {}).get("ip")
+    if not ip:
+        return jsonify(ok=False, message="自分のドローンがわかりません。「1. ドローンを探す」で自分の機体にしてください")
+    message = flyer.start(ip)
+    return jsonify(ok=message is None, message=message)
+
+
+@app.post("/api/fly/move")
+def api_fly_move():
+    body = request.get_json() or {}
+    message = flyer.move(body.get("cmd"), body.get("n"))
+    return jsonify(ok=message is None, message=message)
+
+
+@app.post("/api/fly/land")
+def api_fly_land():
+    flyer.land()
+    return jsonify(ok=True)
+
+
+@app.post("/api/fly/emergency")
+def api_fly_emergency():
+    flyer.emergency()
+    return jsonify(ok=True)
+
+
 @app.get("/router")
 def router_page():
     return render_template("router.html", page="router")
@@ -223,6 +272,7 @@ def api_state():
         role=my_role(),
         arena=arena_layout,
         arena_scan=scanner.status(),
+        fly=flyer.public(),
         arena_hash=arena.fingerprint(arena_layout),
         me=runner.details(),
         choices=battle.choices(),
@@ -388,6 +438,8 @@ def api_arena_scan():
         field = scan.boundary(*(body.get(k) for k in ("back", "front", "far", "near")))
     except (ValueError, TypeError) as exc:
         return jsonify(ok=False, message=str(exc))
+    if flyer.busy():
+        return jsonify(ok=False, message="手動で操縦中です。着陸してからスキャンしてください")
     message = scanner.start(ip, field, save_scanned_arena, kind)
     return jsonify(ok=message is None, message=message)
 
@@ -404,6 +456,8 @@ def api_arena_scan_manual():
     kind = {4: "square4", 8: "pads8"}.get(pads) if isinstance(pads, (int, float)) else None
     if kind is None:
         return jsonify(ok=False, message="パッドの枚数は4枚か8枚にしてください")
+    if flyer.busy():
+        return jsonify(ok=False, message="手動で操縦中です。着陸してからスキャンしてください")
     message = scanner.start_manual(ip, save_scanned_arena, kind)
     return jsonify(ok=message is None, message=message)
 
@@ -416,6 +470,8 @@ def api_arena_scan_walk():
     ip = (my_drone() or {}).get("ip")
     if not ip:
         return jsonify(ok=False, message="自分のドローンがわかりません。「1. ドローンを探す」で自分の機体にしてください")
+    if flyer.busy():
+        return jsonify(ok=False, message="手動で操縦中です。着陸してからスキャンしてください")
     message = scanner.start_walk(ip, save_scanned_arena)
     return jsonify(ok=message is None, message=message)
 
@@ -534,6 +590,8 @@ def api_ready():
         return jsonify(ok=False, message="自分のドローンのIPがわかりません。「1. ドローンを探す」で探してください")
     if ready and scanner.active:
         return jsonify(ok=False, message="フィールドのスキャン中です")
+    if ready and flyer.busy():
+        return jsonify(ok=False, message="手動で操縦中です。着陸してから準備OKにしてください")
     if state["start_at"]:
         return jsonify(ok=False, message="もう始まっています")
     state["ready"] = ready
