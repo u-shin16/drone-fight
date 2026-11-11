@@ -624,8 +624,9 @@ function renderFly(s) {
   $("fly-pad").hidden = !up;
   $("fly-cam").hidden = !up;
   const cam = f.camera;
-  $("fly-video-info").textContent = up ? `カメラの起動: ${cam.reply || "…"} ／ 受信待ち: ${cam.opened ? "はい" : "いいえ"} ／ 届いたコマ数: ${cam.frames}` +
-    (cam.reply && cam.reply !== "ok" ? "（ドローンがカメラを起動できていません）" : cam.frames === 0 ? "（映像が1コマも届いていません）" : "") : "";
+  $("fly-video-info").textContent = up ? `カメラの起動: ${cam.reply || "…"} ／ 届いた映像データ: ${cam.packets}個 ／ 画像にできたコマ数: ${cam.frames}` +
+    (cam.error ? `（${cam.error}）` : cam.reply && cam.reply !== "ok" ? "（ドローンがカメラを起動できていません）" :
+      cam.packets === 0 ? "（映像データがPCに届いていません）" : cam.frames === 0 ? "（届いているが画像にできていません）" : "") : "";
   const img = $("fly-video");
   if (up && f.phase === "flying" && !img.dataset.on) {  // the stream only exists while flying
     img.dataset.on = "1";
