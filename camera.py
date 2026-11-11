@@ -15,11 +15,19 @@ class Camera:
         self._at = 0.0
         self._lock = threading.Lock()
         self._stop = threading.Event()
+        self.reply = ""    # what the drone answered to streamon
+        self.opened = False  # OpenCV is listening on the video port
+        self.frames = 0
+
+    def status(self) -> dict:
+        return {"on": self.on, "reply": self.reply, "opened": self.opened, "frames": self.frames,
+                "age": round(time.monotonic() - self._at, 1) if self._at else None}
 
     def start(self) -> None:
         if self.on:
             return
         self._stop.clear()
+        self.frames, self._at = 0, 0.0
         self.on = True
         threading.Thread(target=self._read, daemon=True).start()
 
@@ -34,15 +42,18 @@ class Camera:
         import cv2
 
         capture = cv2.VideoCapture(VIDEO_URL, cv2.CAP_FFMPEG)
+        self.opened = capture.isOpened()
         try:
             while not self._stop.is_set():
                 ok, frame = capture.read()
                 if ok:
                     with self._lock:
                         self._frame, self._at = frame, time.monotonic()
+                        self.frames += 1
                 else:
                     time.sleep(0.02)
         finally:
+            self.opened = False
             capture.release()
 
     @property

@@ -150,7 +150,7 @@ class FreeFlight:
         live = {"mid": reading.get("mid"), "x": reading.get("x"), "y": reading.get("y"),
                 "z": reading.get("z"), "h": reading.get("h"), "bat": reading.get("bat")} if fresh else None
         return {"phase": self.phase, "message": self.message, "airborne": self.airborne,
-                "moving": self.moving, "chasing": self.chasing, "chase_message": self.chase_message, "live": live, "log": self.log[-8:],
+                "moving": self.moving, "chasing": self.chasing, "chase_message": self.chase_message, "live": live, "camera": self.camera.status(), "log": self.log[-8:],
                 "elapsed": round(time.monotonic() - self.started) if self.started and self.busy() else 0,
                 "limit": FLIGHT_SECONDS}
 
@@ -205,7 +205,12 @@ class FreeFlight:
                 self._send("land", 8)
                 return self._finish("離陸できませんでした")
             self.phase = "flying"
-            self._send("streamon", 5)  # the front camera, shown on the page
+            for _ in range(3):  # the front camera, shown on the page
+                self.camera.reply = self._send("streamon", 5) or "返事なし"
+                if self.camera.reply == "ok":
+                    break
+                time.sleep(0.5)
+            self._note(f"カメラを起動: {self.camera.reply}")
             self.camera.start()
             self.message = "飛んでいます。矢印キーかボタンで動かせます"
             self._note("離陸しました")
