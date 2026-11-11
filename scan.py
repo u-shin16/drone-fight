@@ -210,6 +210,7 @@ class ArenaScanner:
         self.manual = False  # hand-flown: the player orders each move
         self.moving = False
         self.commands: queue.Queue = queue.Queue()
+        self.last_sent = 0.0
         self.trail: list[tuple[float, float]] = []  # where we have been (tracked), to size the field
 
     @property
@@ -283,12 +284,26 @@ class ArenaScanner:
 
     def stop(self) -> None:
         self.stop_event.set()
+        sock = self.sock
+        if sock and self.ip and self.airborne:  # halt a move in progress now, not after it ends
+            try:
+                sock.sendto(b"stop", (self.ip, self.tello_port))
+            except OSError:
+                pass
+
+    def _live(self) -> dict | None:
+        """What the drone's camera sees right now, for the player flying by hand."""
+        reading = self.monitor.latest.get(self.ip or "")
+        if not reading or time.monotonic() - reading["at"] > STATE_TIMEOUT:
+            return None
+        return {"mid": reading.get("mid"), "x": reading.get("x"), "y": reading.get("y"), "h": reading.get("h")}
 
     def status(self) -> dict:
         return {"phase": self.phase, "message": self.message, "log": self.log[-10:],
                 "kind": self.kind, "origin": self.pads.origin,
                 "pads": self.pads.summary(), "pose": [round(v) for v in self.pose],
                 "field": list(self.field) if self.field else None,
+                "live": self._live() if self.manual else None,
                 "manual": self.manual, "moving": self.moving, "airborne": self.airborne,
                 "progress": [self.stops_done, self.stops_total], "time_limit": round(self.time_limit),
                 "elapsed": round(time.monotonic() - self.started) if self.started else 0}
@@ -307,6 +322,7 @@ class ArenaScanner:
             pass
         sock.settimeout(0.2)
         sock.sendto(command.encode(), (self.ip, self.tello_port))
+        self.last_sent = time.monotonic()
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             try:
@@ -472,6 +488,8 @@ class ArenaScanner:
             try:
                 order = self.commands.get(timeout=0.2)
             except queue.Empty:
+                if time.monotonic() - self.last_sent > 4:  # a Tello lands by itself after 15 s of silence
+                    self._send("battery?", 3)
                 continue
             if order[0] == "finish":
                 problem = self._not_measured()

@@ -410,7 +410,10 @@ function renderField(s) {
   if (flyingByHand) {
     for (const b of document.querySelectorAll("#manual-fly .dpad button")) b.disabled = sc.moving || !sc.airborne;
     $("fly-finish").disabled = sc.moving || !sc.airborne;
+    const lv = sc.live;
+    const seen = lv && lv.mid > 0 ? `パッド${lv.mid}が見えています` : "パッドは見えていません";
     $("fly-status").textContent = (!sc.airborne ? "離陸しています…" : sc.moving ? "動いています…" : "待っています。動かしてください")
+      + (sc.airborne ? ` ／ ${seen}${lv && lv.h != null ? "（高さ" + lv.h + "cm）" : ""}` : "")
       + (sc.log.length ? " ／ " + sc.log[sc.log.length - 1].slice(9) : "");
   }
   const savedKind = s.arena ? (s.arena.kind === "simple" ? "simple" : "pads") : null;
