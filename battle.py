@@ -400,7 +400,7 @@ class BattleRunner:
             return
         self.stop_reason = "アプリを終了"
         self.stop_event.set()
-        sock = self.sock or tello_net.tello_socket(0.5)
+        sock = self.sock or tello_net.tello_socket(0.5, self.ip)
         self.sock = sock
         self._raw("stop")
         time.sleep(0.3)
@@ -489,7 +489,7 @@ class BattleRunner:
     def _run(self) -> None:
         if self.stop_event.is_set():
             return self._finish("landed", self.stop_reason or "離陸を中止しました")
-        self.sock = tello_net.tello_socket(0.2)
+        self.sock = tello_net.tello_socket(0.2, self.ip)
         try:
             if self._send("command", 5) != "ok":
                 return self._finish("landed", "ドローンから返事がありません")

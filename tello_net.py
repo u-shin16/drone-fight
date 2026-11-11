@@ -4,6 +4,7 @@ import hashlib
 import ipaddress
 import json
 import os
+import queue
 import re
 import socket
 import subprocess
@@ -58,20 +59,97 @@ def network_mode(ip: str | None) -> str:
     return "direct" if ip.startswith("192.168.10.") else "router"
 
 
-def tello_socket(timeout: float) -> socket.socket:
-    """UDP socket on local port 8889, like the official Tello samples.
+class _Hub:
+    """The one real UDP socket (local port 8889) that every drone conversation shares.
 
-    A Tello may keep answering the port that first sent it 'command', so
-    always using 8889 keeps the replies coming to us. Falls back to any port
-    while another program (e.g. tello_test2.py) holds 8889.
+    A Tello answers the port its 'command' came from, and only one socket can own
+    8889. When two drones were flown from one PC, whichever socket was made second
+    got a random port and its drone never answered. So there is a single socket here,
+    and each drone gets a DroneSocket that only sees the replies from its own IP.
     """
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        sock.bind(("", LOCAL_PORT))
-    except OSError:
-        sock.bind(("", 0))
-    sock.settimeout(timeout)
-    return sock
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.socks: list["DroneSocket"] = []
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            self.sock.bind(("", LOCAL_PORT))
+        except OSError:
+            self.sock.bind(("", 0))  # another program holds 8889
+        self.sock.settimeout(0.5)
+        threading.Thread(target=self._listen, daemon=True).start()
+
+    def _listen(self) -> None:
+        while True:
+            try:
+                data, source = self.sock.recvfrom(2048)
+            except socket.timeout:
+                continue
+            except OSError:
+                return
+            self.dispatch(data, source)
+
+    def dispatch(self, data: bytes, source: tuple) -> None:
+        with self.lock:
+            for drone_socket in self.socks:
+                if drone_socket.ip is None or drone_socket.ip == source[0]:
+                    drone_socket.queue.put((data, source))
+
+
+_hub: _Hub | None = None
+_hub_lock = threading.Lock()
+
+
+def _get_hub() -> _Hub:
+    global _hub
+    with _hub_lock:
+        if _hub is None:
+            _hub = _Hub()
+        return _hub
+
+
+class DroneSocket:
+    """Looks like a UDP socket to the callers, but only receives from one drone (ip=None: all)."""
+
+    def __init__(self, hub: _Hub, ip: str | None, timeout: float) -> None:
+        self.hub, self.ip, self.timeout = hub, ip, timeout
+        self.queue: queue.Queue = queue.Queue()
+        self.closed = False
+        with hub.lock:
+            hub.socks.append(self)
+
+    def settimeout(self, timeout: float | None) -> None:
+        self.timeout = timeout
+
+    def sendto(self, data: bytes, address: tuple) -> int:
+        if self.closed:
+            raise OSError("socket closed")
+        return self.hub.sock.sendto(data, address)
+
+    def recvfrom(self, size: int = 1024) -> tuple[bytes, tuple]:
+        if self.closed:
+            raise OSError("socket closed")
+        try:
+            if self.timeout == 0:
+                return self.queue.get_nowait()
+            return self.queue.get(timeout=self.timeout)
+        except queue.Empty:
+            raise (BlockingIOError() if self.timeout == 0 else socket.timeout()) from None
+
+    def close(self) -> None:
+        self.closed = True
+        with self.hub.lock:
+            if self in self.hub.socks:
+                self.hub.socks.remove(self)
+
+
+def tello_socket(timeout: float, ip: str | None = None) -> DroneSocket:
+    """A way to talk to a Tello (or, with no ip, to hear every Tello), sent from local port 8889.
+
+    The real socket is shared (see _Hub), so two drones flown from this PC both
+    talk from 8889 and both get their replies.
+    """
+    return DroneSocket(_get_hub(), ip, timeout)
 
 
 def talk(ip: str, commands: list[str], timeout: float = 5,
@@ -81,7 +159,7 @@ def talk(ip: str, commands: list[str], timeout: float = 5,
     A Tello answers only the address that last sent it 'command', so the
     queries must come from the same socket; 'command' is sent first.
     """
-    sock = tello_socket(timeout)
+    sock = tello_socket(timeout, ip)
     replies: list[str | None] = []
     try:
         for command in ["command", *commands]:

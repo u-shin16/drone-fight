@@ -335,7 +335,7 @@ class ArenaScanner:
 
     def _run(self, on_success) -> None:
         try:
-            self.sock = tello_net.tello_socket(0.2)
+            self.sock = tello_net.tello_socket(0.2, self.ip)
             self._fly()
             self._land()
             layout = build_layout(self.pads, self.field, self.closure)
