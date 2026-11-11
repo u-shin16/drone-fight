@@ -230,6 +230,19 @@ def api_fly_video():
     return Response(frames(), mimetype="multipart/x-mixed-replace; boundary=frame")
 
 
+@app.post("/api/fly/view")
+def api_fly_view():
+    """Show the camera without flying."""
+    why = drone_busy()
+    if why or state["ready"] or state["start_at"]:
+        return jsonify(ok=False, message=why or "準備OK・バトル中は使えません")
+    ip = (my_drone() or {}).get("ip")
+    if not ip:
+        return jsonify(ok=False, message="自分のドローンがわかりません。「1. ドローンを探す」で自分の機体にしてください")
+    message = flyer.view(ip)
+    return jsonify(ok=message is None, message=message)
+
+
 @app.post("/api/fly/chase")
 def api_fly_chase():
     """Chase the colour (attack-drn). Flying already: hand the drone over; not flying: take off and chase."""

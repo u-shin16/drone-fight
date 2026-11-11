@@ -35,6 +35,15 @@ try:
     sn = call("/api/state")["drones"][0]["sn"]
     assert call("/api/claim", {"sn": sn})["ok"]
     assert call("/api/fly/move", {"cmd": "forward", "n": 40})["ok"] is False  # not flying
+    assert call("/api/fly/view", {})["ok"]  # the camera alone: it does not take off
+    time.sleep(2)
+    f = call("/api/state")["fly"]; assert f["phase"] == "viewing" and not truth()["flying"], f
+    assert call("/api/fly/start", {})["ok"] is False  # busy looking
+    call("/api/fly/land", {})
+    for _ in range(50):
+        if call("/api/state")["fly"]["phase"] == "done": break
+        time.sleep(0.2)
+    assert call("/api/state")["fly"]["phase"] == "done"
     r = call("/api/fly/start", {}); assert r["ok"], r
     for _ in range(100):
         if call("/api/state")["fly"]["phase"] == "flying": break
@@ -72,6 +81,9 @@ try:
         if call("/api/state")["fly"]["phase"] == "done": break
         time.sleep(0.2)
     f = call("/api/state")["fly"]; print(f["phase"], f["message"], "|", f["chase_message"]); print("\n".join(f["log"]))
+    for _ in range(50):  # the fake writes its true state every 50 ms
+        if not truth()["flying"]: break
+        time.sleep(0.1)
     assert f["phase"] == "done" and not truth()["flying"] and not f["chasing"]
     print("OK")
 finally:

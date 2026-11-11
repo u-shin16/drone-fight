@@ -48,10 +48,25 @@ class FreeFlight:
         self._moves: queue.Queue = queue.Queue()
         self._stop = threading.Event()
         self._last_sent = 0.0
+        self._view_only = False
         self._camera_asked, self._camera_tries = 0.0, 0
 
     def busy(self) -> bool:
-        return self.phase in ("starting", "flying", "landing")
+        return self.phase in ("starting", "flying", "landing", "viewing")
+
+    def view(self, ip: str) -> str | None:
+        """Only look through the camera on the ground (no takeoff): to check the picture first."""
+        with self.lock:
+            if self.busy():
+                return "もう動いています"
+            if not self.monitor.listening:
+                return "高さやパッドの情報を受け取れません（8890番が使用中）"
+            self._idle()
+            self.phase, self.ip, self.started = "viewing", ip, time.monotonic()
+            self._view_only = True
+            self.message = "カメラだけ映しています（飛びません）"
+        threading.Thread(target=self._run, daemon=True).start()
+        return None
 
     def start(self, ip: str, chase: str | None = None) -> str | None:
         """Take off. With chase="green", start the colour chase as soon as it is up."""
@@ -195,6 +210,8 @@ class FreeFlight:
         try:
             if self._send("command", 5) != "ok":
                 return self._finish("ドローンから返事がありません")
+            if self._view_only:
+                return self._view()
             battery = self._send("battery?", 5)
             if not battery or not battery.isdigit() or int(battery) < MIN_BATTERY:
                 return self._finish(f"電池が{MIN_BATTERY}%未満なので離陸しません（{battery}）")
@@ -225,6 +242,24 @@ class FreeFlight:
             sock, self.sock = self.sock, None
             if sock:
                 sock.close()
+
+    def _view(self) -> None:
+        self._send("moff", 5)
+        self._send("streamoff", 3)
+        self.camera.reply = self._send("streamon", 5) or "返事なし"
+        self._camera_asked, self._camera_tries = time.monotonic(), 0
+        self._note(f"カメラを起動（飛びません）: {self.camera.reply}")
+        self.camera.start()
+        end = time.monotonic() + 180
+        try:
+            while not self._stop.is_set() and time.monotonic() < end:
+                self._watch_camera()
+                self._stop.wait(0.3)
+                if time.monotonic() - self._last_sent > 4:
+                    self._send("battery?", 3)
+        finally:
+            self._send("streamoff", 3)
+            self._finish("カメラを止めました")
 
     def _watch_camera(self) -> None:
         """No video data 4 s after streamon: switch the stream off and on again (up to 3 times)."""

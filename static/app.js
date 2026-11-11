@@ -612,23 +612,26 @@ let started = false;  // no screen updates until a reload's reset has finished
 
 function renderFly(s) {
   const f = s.fly;
-  const up = f.phase === "starting" || f.phase === "flying" || f.phase === "landing";
+  const viewing = f.phase === "viewing";
+  const up = f.phase === "starting" || f.phase === "flying" || f.phase === "landing" || viewing;
   $("fly-start").hidden = up;
+  $("fly-view").hidden = up;
   $("fly-chase-start").hidden = up;
   $("fly-chase").hidden = f.chasing;
   $("fly-chase").disabled = f.phase !== "flying";
   $("fly-chase-stop").hidden = !f.chasing;
   $("fly-chase-msg").textContent = f.chase_message;
   $("fly-land").hidden = !up;
-  $("fly-emergency").hidden = !up;
-  $("fly-pad").hidden = !up;
+  $("fly-emergency").hidden = !up || viewing;
+  $("fly-land").textContent = viewing ? "カメラを止める" : "着陸";
+  $("fly-pad").hidden = !up || viewing;
   $("fly-cam").hidden = !up;
   const cam = f.camera;
   $("fly-video-info").textContent = up ? `カメラの起動: ${cam.reply || "…"} ／ 届いた映像データ: ${cam.packets}個 ／ 画像にできたコマ数: ${cam.frames}` +
     (cam.error ? `（${cam.error}）` : cam.reply && cam.reply !== "ok" ? "（ドローンがカメラを起動できていません）" :
       cam.packets === 0 ? "（映像データがPCに届いていません）" : cam.frames === 0 ? "（届いているが画像にできていません）" : "") : "";
   const img = $("fly-video");
-  if (up && f.phase === "flying" && !img.dataset.on) {  // the stream only exists while flying
+  if (up && (f.phase === "flying" || viewing) && !img.dataset.on) {  // the stream only exists while flying
     img.dataset.on = "1";
     img.onload = () => { $("fly-video-wait").hidden = true; };
     img.src = "/api/fly/video?t=" + Date.now();
@@ -696,6 +699,11 @@ if (page === "fly") {
     refresh();
   });
   $("fly-chase-stop").addEventListener("click", () => post("/api/fly/chase/stop").then(refresh));
+  $("fly-view").addEventListener("click", async () => {
+    const r = await post("/api/fly/view");
+    $("fly-top-msg").textContent = r.ok ? "カメラをつないでいます…" : r.message;
+    refresh();
+  });
   $("fly-land").addEventListener("click", () => post("/api/fly/land").then(refresh));
   $("fly-emergency").addEventListener("click", () => post("/api/fly/emergency").then(refresh));
 }
