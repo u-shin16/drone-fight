@@ -19,6 +19,7 @@ import os
 MOVE_ERROR = float(os.environ.get("FAKE_MOVE_ERROR", 0.2))
 ANGLE_ERROR = float(os.environ.get("FAKE_ANGLE_ERROR", 10))
 YAW_DRIFT = float(os.environ.get("FAKE_YAW_DRIFT", 0))  # degrees the body turns by itself per move
+YAW_SIGN = float(os.environ.get("FAKE_YAW_SIGN", 1))  # the real camera's yaw sign is not known
 rng = random.Random(port)
 srv = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); srv.bind(("127.0.0.1", port))
 
@@ -59,7 +60,7 @@ def stream():
             # The downward camera sees about ±0.42 x height around the drone.
             if math.hypot(x - cx, y - cy) <= 0.42 * z:
                 mid, px, py = k, round(x - cx), round(-(y - cy))  # pad y points left
-                mpry = f"0,0,{round((heading + 180) % 360 - 180)}"
+                mpry = f"0,0,{round(YAW_SIGN * ((heading + 180) % 360 - 180))}"
         h = round(z) if flying else 0
         st.sendto(f"mid:{mid};x:{px};y:{py};z:{h};mpry:{mpry};h:{h};tof:{h + 5};bat:77;".encode(), ("127.0.0.1", state_port))
         save(); time.sleep(0.05)

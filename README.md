@@ -59,3 +59,6 @@ Telloは最初に `command` を送ったPCにしか返事をしないので、2�
 偽Telloの結果は、偽Telloの動き方（移動のズレ、カメラの見える範囲＝高さ×約0.42の半径）を前提にしたもので、実機の精度や安全を保証しません。実機でのスキャン・飛行、2台同時の通信（1台モードで2台が同じPCに返事するか）、壁・人との離隔はまだ検証していません。
 
 公式資料: [Ryze Mission Pad User Guide](https://dl-cdn.ryzerobotics.com/downloads/Tello/Tello%20Mission%20Pad%20User%20Guide.pdf)、[Tello SDK 2.0 User Guide](https://dl-cdn.ryzerobotics.com/downloads/Tello/Tello%20SDK%202.0%20User%20Guide.pdf)。
+
+## 手動スキャンは、どこから・どの向きで離陸してもよい
+手動スキャンは、パッドの上から離陸する必要がなく、機首の向きも自由です。離陸した場所を原点、機首を前として位置を記録し、パッドが見えたときのカメラの角度と、自分の移動のズレから「パッドの向きとのズレ」を割り出して、基準のパッドを原点・ロケットを右にした地図に直します。カメラの角度の符号は不明なので、両方を試して、自分の移動と合う方を採ります（`PadMap(free=True)`）。各パッドは、反対側から2回以上通ってください。`python3 tests/scan_sim.py angle`（55°向き）・`angle4`（-130°向き＋符号反転）で確認できます。

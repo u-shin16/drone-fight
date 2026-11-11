@@ -215,3 +215,29 @@ class ManualScanTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FreeAngleTest(unittest.TestCase):
+    """A hand-flown scan may take off anywhere, facing any way."""
+
+    def sight(self, pads, pad, truth, centers, heading, sign=1):
+        """What the drone reports at 'truth' (pad axes) when its nose points 'heading' degrees (pad axes)."""
+        cx, cy = centers[pad]
+        offset = (truth[0] - cx, truth[1] - cy)
+        phi = -math.radians(heading)  # pad axes -> takeoff frame
+        tracked = scan._rot(truth, phi)
+        return pads.observe(pad, offset, tracked, sign * heading)
+
+    def test_any_facing_and_yaw_sign_give_the_same_map(self):
+        centers = {1: (-3, -90), 2: (118, -85), 3: (0, 0), 4: (120, 5)}
+        for heading in (0, 55, -130, 170):
+            for sign in (1, -1):
+                pads = scan.PadMap("square4", free=True)
+                # Each pad is passed from opposite sides (44cm apart), which is what tells the yaw's sign.
+                for pad, (x, y) in centers.items():
+                    for at in ((x + 22, y + 4), (x - 22, y - 3)):
+                        self.sight(pads, pad, at, centers, heading, sign)
+                for pad, (x, y) in centers.items():
+                    mx, my = pads.map_center(pad)
+                    self.assertAlmostEqual(mx, x, delta=3, msg=(heading, sign, pad))
+                    self.assertAlmostEqual(my, y, delta=3, msg=(heading, sign, pad))
