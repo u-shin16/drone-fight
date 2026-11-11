@@ -33,6 +33,11 @@ MAX_CLOSURE = 30      # cm: back over pad 4, our tracked position may be this fa
 MAX_YAW = 20          # degrees away from the rockets before we give up
 TIME_LIMIT = 360      # s at most for the whole scan (the route sets the actual limit)
 SECONDS_PER_STOP = 4.5  # move + settle per stop, used to size the time limit
+WALK_STEP = 20        # cm per hop while walking the square (the SDK's smallest move)
+WALK_SPEED = 30       # cm/s: slow, so the camera reads every pad it passes
+WALK_LEG_MAX = 260    # cm: a side of the square that long without a new pad means we are lost
+WALK_PAST = 3         # hops taken past a pad's edge to cross it, then back to its middle
+WALK_TIME = 300       # s at most for the whole walk
 MANUAL_LIMIT = 400    # cm: how far from the origin pad a hand-flown scan may go (each way)
 MANUAL_TIME = 480     # s at most for a hand-flown scan (a Tello's battery lasts about 10 minutes)
 MANUAL_STEP_MAX = 100  # cm: the longest single move the player can order
@@ -126,7 +131,7 @@ class PadMap:
         # The pad that A takes off from is the origin of the map.
         self.origin = int(arena.SETS[kind]["starts"]["A"])
         self._sightings: dict[int, list[tuple[float, float]]] = {k: [] for k in self.ids}
-        # free: (where we thought we were, where the pad says we are in its axes, our yaw to the pad in radians)
+        # free: (where we thought we were, [and by moves alone as the last item], where the pad says we are in its axes, our yaw to the pad in radians)
         self.raw: dict[int, list[tuple]] = {k: [] for k in self.ids}
         self._phi_cache: tuple[int, float] | None = None
 
@@ -138,7 +143,7 @@ class PadMap:
         out = {}
         for k in self.ids:
             out[k] = []
-            for tracked, offset, _ in self.raw[k]:
+            for tracked, offset, *_ in self.raw[k]:
                 r = _rot(offset, phi)
                 out[k].append((tracked[0] - r[0], tracked[1] - r[1]))
         return out
@@ -161,9 +166,9 @@ class PadMap:
             for v in self.raw.values():
                 for i in range(len(v)):
                     for j in range(i + 1, len(v)):
-                        dt = (v[j][0][0] - v[i][0][0], v[j][0][1] - v[i][0][1])
+                        dt = (v[j][3][0] - v[i][3][0], v[j][3][1] - v[i][3][1])  # moves alone: not bent by corrections
                         dp = (v[j][1][0] - v[i][1][0], v[j][1][1] - v[i][1][1])
-                        if math.hypot(*dt) < 40 or math.hypot(*dp) < 40:
+                        if math.hypot(*dt) < 25 or math.hypot(*dp) < 25:
                             continue
                         w = math.hypot(*dp) ** 2
                         sin_sum += w * (dp[0] * dt[1] - dp[1] * dt[0]) / (math.hypot(*dp) * math.hypot(*dt))
@@ -200,16 +205,16 @@ class PadMap:
         return (statistics.fmean(p[0] for p in seen), statistics.fmean(p[1] for p in seen))
 
     def observe(self, pad: int, offset: tuple[float, float], tracked: tuple[float, float],
-                yaw: float | None = None) -> tuple[float, float]:
+                yaw: float | None = None, dead: tuple[float, float] | None = None) -> tuple[float, float]:
         """Record a sighting; returns our corrected position.
 
         'offset' is where we are relative to the pad centre (map axes), and
         'tracked' is where our own moves say we are. The centre implied by this
         sighting is tracked - offset; once the pad is known we re-anchor on it
-        so move errors never pile up between pads. 'yaw' (degrees) only matters to a free scan.
+        so move errors never pile up between pads. 'yaw' (degrees) and 'dead' (our position by moves alone, never corrected by a pad) only matter to a free scan.
         """
         if self.free:
-            self.raw[pad].append((tracked, offset, math.radians(yaw) if yaw is not None else None))
+            self.raw[pad].append((tracked, offset, math.radians(yaw) if yaw is not None else None, dead or tracked))
             cx, cy = self.center(pad)
             r = _rot(offset, self.phi())
             return (cx + r[0], cy + r[1])
@@ -284,6 +289,7 @@ class ArenaScanner:
         self.kind = "pads8"
         self.pads = PadMap()
         self.pose = (0.0, 0.0)
+        self.dead = (0.0, 0.0)  # where the moves alone say we are
         self.closure: float | None = None
         self.log: list[str] = []
         self.stops_done = 0
@@ -294,6 +300,7 @@ class ArenaScanner:
         self.sock = None
         self.airborne = False
         self.manual = False  # hand-flown: the player orders each move
+        self.walk = False    # walks the square by itself: straight to the next pad, turn right, repeat
         self.moving = False
         self.commands: queue.Queue = queue.Queue()
         self.last_sent = 0.0
@@ -350,6 +357,31 @@ class ArenaScanner:
         threading.Thread(target=self._run, args=(on_success,), daemon=True).start()
         return None
 
+    def start_walk(self, ip: str, on_success, kind: str = "square4") -> str | None:
+        """Walk the 4-pad square on its own: straight until the next pad, stop on it, turn right, repeat.
+
+        The drone takes off over any one pad with its nose along a side of the square, the square
+        on its right. Returns an error message instead if it cannot start.
+        """
+        with self.lock:
+            if self.active:
+                return "スキャン中です"
+            if kind != "square4":
+                return "四角を歩くスキャンは4枚（正方形）のときだけ使えます"
+            if not self.monitor.listening:
+                return "高さやパッドの情報を受け取れません（8890番が使用中）"
+            self._clear()
+            self.kind = kind
+            self.pads = PadMap(kind, free=True)
+            self.walk = True
+            self.phase, self.ip = "running", ip
+            self.field = (-MANUAL_LIMIT, MANUAL_LIMIT, -MANUAL_LIMIT, MANUAL_LIMIT)
+            self.stops_total = len(self.pads.ids)
+            self.time_limit = WALK_TIME
+            self.started = time.monotonic()
+        threading.Thread(target=self._run, args=(on_success,), daemon=True).start()
+        return None
+
     def command(self, action: str, dx: float = 0.0, dy: float = 0.0) -> str | None:
         """An order from the player in a hand-flown scan; returns why it was refused, else None."""
         if not (self.active and self.manual and self.airborne):
@@ -390,7 +422,7 @@ class ArenaScanner:
                 "pads": self.pads.summary(), "pose": [round(v) for v in self.pads.to_map(self.pose)],
                 "field": list(self.field) if self.field else None,
                 "live": self._live() if self.manual else None,
-                "manual": self.manual, "moving": self.moving, "airborne": self.airborne,
+                "manual": self.manual, "walk": self.walk, "moving": self.moving, "airborne": self.airborne,
                 "progress": [self.stops_done, self.stops_total], "time_limit": round(self.time_limit),
                 "elapsed": round(time.monotonic() - self.started) if self.started else 0}
 
@@ -480,6 +512,7 @@ class ArenaScanner:
             reply = self._send(command, 15)
             if reply == "ok":
                 self.pose = (x, y)
+                self.dead = (self.dead[0] + dx, self.dead[1] + dy)
                 return
             self._note(f"{command} → {reply or '返事なし'}")
         raise ScanAbort("移動の命令が3回続けて失敗しました")
@@ -488,7 +521,7 @@ class ArenaScanner:
         sighting = self._look()
         if sighting:
             pad, offset, yaw = sighting
-            self.pose = self.pads.observe(pad, offset, self.pose, yaw)
+            self.pose = self.pads.observe(pad, offset, self.pose, yaw, self.dead)
         self.trail.append(self.pose)
 
     def _run(self, on_success) -> None:
@@ -496,7 +529,7 @@ class ArenaScanner:
             self.sock = tello_net.tello_socket(0.2, self.ip)
             self._fly()
             self._land()
-            if self.manual:
+            if self.pads.free:
                 self.field = self._worked_out_field()
             layout = build_layout(self.pads, self.field, self.closure)
             on_success(layout)
@@ -535,9 +568,9 @@ class ArenaScanner:
             self._send(f"up {round(SCAN_HEIGHT - height)}", 10)
         self._send(f"speed {SPEED}", 5)
         start = self._look()
-        if self.manual:
+        if self.manual or self.walk:
             if start:
-                self.pose = self.pads.observe(start[0], start[1], (0.0, 0.0), start[2])
+                self.pose = self.pads.observe(start[0], start[1], (0.0, 0.0), start[2], (0.0, 0.0))
                 self._note(f"離陸した場所でパッド{start[0]}が見えました")
             else:
                 self._note("離陸した場所にパッドは見えません。動かして探してください")
@@ -549,6 +582,13 @@ class ArenaScanner:
             self.pose = self.pads.observe(origin, start[1], (0.0, 0.0))
             self._note(f"パッド{origin}を確認。スキャンを始めます")
 
+        if self.walk:
+            if not start:
+                raise ScanAbort("離陸した場所でパッドが見えません。どれか1枚の真ん中から離陸してください")
+            self.trail.append(self.pose)
+            self._send(f"speed {WALK_SPEED}", 5)
+            self._walk(start[0])
+            return
         if self.manual:
             self._manual_loop()
         else:
@@ -571,7 +611,7 @@ class ArenaScanner:
         if sighting and sighting[0] == origin and self.manual:
             c, r = self.pads.center(origin), _rot(sighting[1], self.pads.phi())
             self.closure = math.hypot(tracked[0] - (c[0] + r[0]), tracked[1] - (c[1] + r[1]))  # before this sighting joins the map
-            self.pose = self.pads.observe(origin, sighting[1], tracked, sighting[2])
+            self.pose = self.pads.observe(origin, sighting[1], tracked, sighting[2], self.dead)
             self._note(f"パッド{origin}に戻りました（1周のズレ {self.closure:.0f}cm）")
         elif sighting and sighting[0] == origin:
             offset = sighting[1]
@@ -580,6 +620,85 @@ class ArenaScanner:
             self._note(f"パッド{origin}に戻りました（1周のズレ {self.closure:.0f}cm）")
         else:
             self._note(f"戻った場所でパッド{origin}が見えませんでした")
+
+    def _sight(self) -> tuple[int, tuple[float, float], float | None] | None:
+        """Look once, record what is seen and keep our position corrected by it."""
+        sighting = self._look()
+        if sighting:
+            pad, offset, yaw = sighting
+            self.pose = self.pads.observe(pad, offset, self.pose, yaw, self.dead)
+        self.trail.append(self.pose)
+        return sighting
+
+    def _walk_step(self, direction: tuple[float, float]) -> None:
+        """One hop along 'direction' (a unit vector), long enough that the SDK does not ignore it."""
+        k = WALK_STEP / max(abs(direction[0]), abs(direction[1]))
+        self._hop(direction[0] * k, direction[1] * k)
+
+    def _walk_to(self, target: tuple[float, float]) -> None:
+        """Back to a point on the pad, reading as we go; moves too small for the SDK are not made."""
+        for _ in range(6):
+            dx, dy = target[0] - self.pose[0], target[1] - self.pose[1]
+            big = max(abs(dx), abs(dy))
+            if big < WALK_STEP:
+                return
+            count = max(1, min(math.ceil(math.hypot(dx, dy) / 50), int(big // WALK_STEP)))
+            self._hop(dx / count, dy / count)
+            self._sight()
+
+    def _walk(self, start: int) -> None:
+        """Around the square: hop straight on, stop on the next pad, turn right (in the map), repeat.
+
+        The drone does not really turn: flying the same sides without spinning keeps the camera's
+        reference steady and avoids a turn's error. After the first side, each side's direction is
+        taken from the two pads just measured, so a nose that was a little off only costs the first side.
+        """
+        visited, current = [start], start
+        direction = (1.0, 0.0)  # the nose, in the takeoff frame
+        for leg in range(4):
+            wanted = {start} if leg == 3 else set(self.pads.ids) - set(visited)
+            self._note(f"パッド{current}から次のパッドへまっすぐ進みます（{leg + 1}/4辺目）")
+            found = None
+            for _ in range(WALK_LEG_MAX // WALK_STEP):
+                self._walk_step(direction)
+                before = self.pose
+                sighting = self._look()
+                if sighting:
+                    pad, offset, yaw = sighting
+                    if pad == start and leg == 3 and self.closure is None:
+                        c, r = self.pads.center(pad), _rot(offset, self.pads.phi())
+                        self.closure = math.hypot(before[0] - (c[0] + r[0]), before[1] - (c[1] + r[1]))
+                    self.pose = self.pads.observe(pad, offset, self.pose, yaw, self.dead)
+                    if pad in wanted:
+                        found = pad
+                    elif pad != current:
+                        raise ScanAbort(f"予想外のパッド{pad}が見えました。パッドの並びか、離陸したときの向きを確かめてください")
+                self.trail.append(self.pose)
+                if found:
+                    break
+            if found is None:
+                raise ScanAbort(f"{WALK_LEG_MAX}cm進んでも次のパッドが見つかりませんでした")
+            # Cross the pad so it is read from both sides of its middle, then go back to the middle.
+            for _ in range(WALK_PAST):
+                self._walk_step(direction)
+                seen = self._sight()
+                if not seen or seen[0] != found:
+                    break
+            self._walk_to(self.pads.center(found))
+            self._note(f"パッド{found}の真ん中で止まりました")
+            visited.append(found)
+            self.stops_done += 1
+            if leg < 3:
+                here, there = self.pads.center(current), self.pads.center(found)
+                side = (there[0] - here[0], there[1] - here[1])
+                length = math.hypot(*side)
+                if length > 40:
+                    direction = (side[0] / length, side[1] / length)
+                direction = (-direction[1], direction[0])  # turn right
+            current = found
+        if self.closure is None:
+            raise ScanAbort("最初のパッドに戻ったことを確認できませんでした")
+        self._note(f"四角を1周しました（1周のズレ {self.closure:.0f}cm）")
 
     def _manual_loop(self) -> None:
         """Wait for the player's orders; 'finish' is accepted once every pad is measured well enough."""

@@ -72,7 +72,9 @@
   <ol class="steps-list" data-for="4">
     <li>パッドを<b>奥から「1 2 ／ 3 4」</b>の並びで、<b>数字の面を上</b>にして床に置く。パッド同士の間隔は100〜120cmが目安（正方形の大きさは測って把握します）。</li>
     <li><b>ロケットの絵を4枚とも同じ向き</b>にそろえる（パッド3から4の方へ向く向き）。</li>
-    <li>自分のドローンを、<b>パッドの近く（どこでも・どの向きでも）</b>に置いて離陸する。相手のドローンはどかしておく。</li>
+    <li><b>自動で四角を歩く</b>場合：どれか1枚のパッドの<b>真ん中</b>にドローンを置き、機首を<b>隣のパッドの方（四角が右手に来る向き）</b>へ向けて離陸する。まっすぐ進んでパッドの上で止まり、右へ曲がる、を4回くり返して1周します。機首は多少ずれていても大丈夫です。</li>
+    <li><b>手動で飛ばす</b>場合：パッドの近く（どこでも・どの向きでも）から離陸する。</li>
+    <li>相手のドローンはどかしておく。</li>
   </ol>
   <ol class="steps-list" data-for="8" hidden>
     <li>パッドを<b>奥から「1 2 3 ／ 4 5 6 ／ 7 8」</b>の並びで、<b>数字の面を上</b>にして床に置く。間隔は自由。</li>
@@ -89,11 +91,12 @@
   <button id="scan-start" hidden>自動スキャン</button>
   </div>
   <div class="row" style="margin-top:14px">
-    <button id="scan-manual" class="big-button">手動で飛ばしてスキャン（離陸します）</button>
+    <button id="scan-walk" class="big-button">自動で四角を歩いてスキャン（離陸します）</button>
+    <button id="scan-manual" class="big-button ghost">手動で飛ばしてスキャン（離陸します）</button>
     <button id="scan-stop" class="stop big-button" hidden>停止して着陸</button>
     <span class="msg" id="scan-msg"></span>
   </div>
-  <p class="muted" style="font-size:13px;margin:10px 0 0">ドローンを手で動かして、パッドの上を通ります。飛べる範囲は、飛んだ場所から自動で決めます。電池50%以上が必要です。Escキーでも停止して着陸します。</p>
+  <p class="muted" style="font-size:13px;margin:10px 0 0">「自動で四角を歩く」は4枚のときだけ使えます（ゆっくり進んで、パッドごとに止まります）。「手動」は自分で動かします。どちらも、飛べる範囲は飛んだ場所から自動で決めます。電池50%以上が必要です。Escキーでも停止して着陸します。</p>
 </section>
 
 <section class="card" id="manual-fly" hidden>

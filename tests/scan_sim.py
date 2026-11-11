@@ -11,6 +11,8 @@ argv: scenario [index]
   square4    four pads in a square, 1 2 / 3 4, taking off from pad 3
   manual     8 pads, hand-flown: a pilot script orders the moves, like the player's buttons
   manual4    the square, hand-flown
+  walk       the square walked by itself from pad 3, nose along the side to pad 1 (10 degrees off)
+  walk4      the same from pad 4 toward pad 3, camera yaw sign flipped, nose 15 degrees off
   angle      8 pads, hand-flown, taken off beside pad 4 facing 55 degrees away from the rockets
   angle4     the square, the same but facing -130 degrees and the camera's yaw sign flipped
 The fake world puts pad 4 away from (0, 0) so the "relative to pad 4" maths is tested too.
@@ -23,7 +25,8 @@ index = int(sys.argv[2]) if len(sys.argv) > 2 else 0
 APP = Path(__file__).resolve().parents[1]
 PY = sys.executable
 SP = Path(tempfile.mkdtemp(prefix=f"tello-scan-{scenario}-"))
-SQUARE = scenario in ("square4", "manual4", "angle4")
+SQUARE = scenario in ("square4", "manual4", "angle4", "walk", "walk4", "walkrough")
+WALK = scenario.startswith("walk")
 MANUAL = scenario.startswith(("manual", "angle"))
 PAD4 = (37.0, -12.0)  # where the origin pad is (pad 3 for the square)
 # 1 2 3 / 4 5 6 / 7 8, irregular, relative to pad 4.
@@ -36,13 +39,15 @@ world = {str(k): [PAD4[0] + x, PAD4[1] + y] for k, (x, y) in RELATIVE.items()
 (SP / "world.json").write_text(json.dumps({"pads": world}))
 start = RELATIVE[5] if scenario == "start5" else (0, 0)
 FACING = 0
+if WALK:  # over a pad's middle, nose along a side with the square on the right (pad 3 -> 1, or pad 4 -> 3)
+    start, FACING = ((0, 0), -80) if scenario == "walk" else ((120, 5), 165)
 if scenario.startswith("angle"):
     start, FACING = (14, 10), (55 if scenario == "angle" else -130)
 tello_port, state_port, port, peer_port = 9031 + index, 9131 + index, 5081 + index, 47480 + index
-env = dict(os.environ, FAKE_MOVE_ERROR="0.2" if scenario == "rough" else "0.1",
-           FAKE_ANGLE_ERROR="10" if scenario == "rough" else "5",
+env = dict(os.environ, FAKE_MOVE_ERROR="0.2" if scenario in ("rough", "walkrough") else "0.1",
+           FAKE_ANGLE_ERROR="10" if scenario in ("rough", "walkrough") else "5",
            FAKE_YAW_DRIFT="2.5" if scenario == "yaw" else "0",
-           FAKE_YAW_SIGN="-1" if scenario == "angle4" else "1")
+           FAKE_YAW_SIGN="-1" if scenario in ("angle4", "walk4") else "1")
 fake = subprocess.Popen([PY, str(APP / "tests/fake_pad_tello.py"), str(tello_port), str(state_port), "FAKE",
                          str(PAD4[0] + start[0] + 6), str(PAD4[1] + start[1] - 4), str(FACING), str(SP / "true.json"),
                          "state-drop" if scenario == "state-drop" else "1", str(SP / "world.json")],
@@ -69,7 +74,9 @@ try:
     sn = call("/api/state")["drones"][0]["sn"]
     assert call("/api/claim", {"sn": sn})["ok"]
     began = time.time()
-    if MANUAL:
+    if WALK:
+        reply = call("/api/arena/scan/walk", {})
+    elif MANUAL:
         reply = call("/api/arena/scan/manual", {"pads": 4 if SQUARE else 8})
     else:
         reply = call("/api/arena/scan", {"pads": 4 if SQUARE else 8, "back": 80, "front": 260, "far": 170, "near": 180})
@@ -144,6 +151,8 @@ try:
         print("  pad error cm: " + ", ".join(f"{k}:{e:.0f}" for k, e in sorted(errors.items()))
               + f"  (max {max(errors.values()):.0f})")
     print("  " + "\n  ".join(sc["log"][-4:]))
+    if sc["phase"] == "failed":
+        print("\n".join(sc["log"])); print("  pads:", {k: (v["center"], v["seen"]) for k, v in sc["pads"].items()}, "pose", sc["pose"])
 finally:
     if "hold" in sys.argv:
         time.sleep(float(os.environ.get("HOLD", 20)))

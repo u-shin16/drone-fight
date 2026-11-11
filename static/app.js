@@ -380,6 +380,8 @@ function showPadCount(n) {
   for (const b of document.querySelectorAll(".segment [data-pads]")) b.classList.toggle("on", Number(b.dataset.pads) === n);
   for (const ol of document.querySelectorAll("[data-for]")) ol.hidden = Number(ol.dataset.for) !== n;
   document.querySelector(".pad-count").textContent = n;
+  $("scan-walk").disabled = n !== 4;
+  $("scan-walk").title = n === 4 ? "" : "4枚（正方形）のときだけ使えます";
   document.querySelector(".far-pads").textContent = n === 4 ? "パッド1・2" : "パッド1〜3";
   document.querySelector(".near-note").textContent = n === 4 ? "（パッドはありません。安全な余白）" : "（パッド7・8の側）";
 }
@@ -451,12 +453,13 @@ function renderField(s) {
   }
   $("scan-start").hidden = running;
   $("scan-manual").hidden = running;
+  $("scan-walk").hidden = running;
   $("scan-stop").hidden = !running;
   for (const id of ["b-back", "b-front", "b-far", "b-near"]) $(id).disabled = running;
   $("scan-title").textContent = sc.phase === "idle" && s.arena ? "保存済みの地図" : PHASE_TITLE[sc.phase];
   $("scan-title").className = sc.phase === "failed" ? "error" : sc.phase === "done" ? "ok-text" : "";
   $("scan-progress").textContent = sc.phase === "idle" ? "" :
-    (running ? (sc.manual ? `手動で操作中 ・ 動かした回数 ${sc.progress[0]} ・ ${sc.elapsed}秒（${sc.time_limit}秒まで）`
+    (running ? (sc.walk ? `四角を歩いています ・ 止まったパッド ${sc.progress[0]} / ${sc.progress[1]} ・ ${sc.elapsed}秒（${sc.time_limit}秒まで）` : sc.manual ? `手動で操作中 ・ 動かした回数 ${sc.progress[0]} ・ ${sc.elapsed}秒（${sc.time_limit}秒まで）`
       : `止まって読んだ場所 ${sc.progress[0]} / ${sc.progress[1]} ・ ${sc.elapsed}秒（${sc.time_limit}秒まで）`) : sc.message);
   $("scan-log").textContent = sc.log.join("\n");
   $("scan-sync").textContent = arenaSyncText(s, s.matching ? s.peers[0] : null);
@@ -479,7 +482,7 @@ function renderField(s) {
     const pads = {};
     for (const k of ids) pads[k] = sc.pads[k].center;
     let field = sc.field;
-    if (running && sc.manual) {
+    if (running && (sc.manual || sc.walk)) {
       // A blank map that grows: just big enough for the origin, the drone and the pads read so far.
       const pts = [[0, 0], [sc.pose[0], sc.pose[1]], ...Object.values(pads).filter(Boolean)];
       const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
@@ -697,6 +700,15 @@ if (page === "field") {
   $("fly-finish").addEventListener("click", async () => {
     const r = await post("/api/arena/scan/finish");
     $("fly-msg").textContent = r.ok ? "" : r.message;
+    refresh();
+  });
+  $("scan-walk").addEventListener("click", async () => {
+    if (!confirm("パッドの真ん中から、機首を隣のパッドの方（四角が右手に来る向き）へ向けて置きましたか？ 離陸して、四角の1周をゆっくり歩きます。周りに人や物がないか確認しましたか？")) return;
+    $("scan-msg").className = "msg";
+    $("scan-msg").textContent = "離陸します…";
+    const r = await post("/api/arena/scan/walk");
+    $("scan-msg").className = r.ok ? "msg" : "msg error";
+    $("scan-msg").textContent = r.ok ? "" : r.message;
     refresh();
   });
   $("scan-manual").addEventListener("click", async () => {

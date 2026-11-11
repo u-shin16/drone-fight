@@ -408,6 +408,18 @@ def api_arena_scan_manual():
     return jsonify(ok=message is None, message=message)
 
 
+@app.post("/api/arena/scan/walk")
+def api_arena_scan_walk():
+    """The drone walks the 4-pad square on its own, stopping on each pad (no declared field)."""
+    if state["ready"] or state["start_at"] or runner.phase in ("starting", "flying"):
+        return jsonify(ok=False, message="準備OK・バトル中はスキャンできません")
+    ip = (my_drone() or {}).get("ip")
+    if not ip:
+        return jsonify(ok=False, message="自分のドローンがわかりません。「1. ドローンを探す」で自分の機体にしてください")
+    message = scanner.start_walk(ip, save_scanned_arena)
+    return jsonify(ok=message is None, message=message)
+
+
 @app.post("/api/arena/scan/move")
 def api_arena_scan_move():
     body = request.get_json()
