@@ -5,6 +5,7 @@
   <p style="margin-top:0">バトルやスキャンとは関係なく、「1. ドローンを探す」で選んだ自分の機体を飛ばします。離陸すると、その場でホバリングして、矢印キー（またはボタン）で少しずつ動かせます。下向きカメラがミッションパッドを読むと、下に表示します。</p>
   <div class="row">
     <button id="fly-start" class="big-button">離陸する</button>
+    <button id="fly-chase-start" class="big-button ghost">離陸して緑を追う</button>
     <button id="fly-land" class="big-button" hidden>着陸</button>
     <button id="fly-emergency" class="stop big-button" hidden>緊急停止（落ちます）</button>
     <span class="msg" id="fly-top-msg"></span>
@@ -14,6 +15,12 @@
 
 <section class="card" id="fly-pad" hidden>
   <h2>操作</h2>
+  <div class="row" style="margin-bottom:14px">
+    <button id="fly-chase" class="big-button">緑を追いかける</button>
+    <button id="fly-chase-stop" class="stop big-button" hidden>追うのをやめる（着陸）</button>
+    <span class="muted" id="fly-chase-msg"></span>
+  </div>
+  <p class="muted" style="font-size:13px;margin:0 0 14px">attack-drn の追跡です。前のカメラに映った緑を見つけて向きを合わせ、全速力で前進します。見失うとその場で回って探します。やめると着陸します（元のプログラムと同じ）。緑のものを相手として持ってもらってください。この間、安全制御（電池・高さ・傾きでの自動着陸）は外してあります。</p>
   <div class="row" style="align-items:center;gap:32px;flex-wrap:wrap">
     <div>
       <div class="dpad" style="display:grid;grid-template-columns:repeat(3,72px);grid-template-rows:repeat(3,48px);gap:6px">

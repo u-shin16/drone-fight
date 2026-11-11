@@ -216,6 +216,33 @@ def api_fly_start():
     return jsonify(ok=message is None, message=message)
 
 
+@app.post("/api/fly/chase")
+def api_fly_chase():
+    """Chase the colour (attack-drn). Flying already: hand the drone over; not flying: take off and chase."""
+    marker = (request.get_json(silent=True) or {}).get("marker", "green")
+    if marker not in ("green", "red", "blue"):
+        return jsonify(ok=False, message="色は green・red・blue のどれかです")
+    if flyer.busy():
+        message = flyer.chase(marker)
+        return jsonify(ok=message is None, message=message)
+    if state["ready"] or state["start_at"]:
+        return jsonify(ok=False, message="準備OK・バトル中は操縦できません")
+    why = drone_busy()
+    if why:
+        return jsonify(ok=False, message=why)
+    ip = (my_drone() or {}).get("ip")
+    if not ip:
+        return jsonify(ok=False, message="自分のドローンがわかりません。「1. ドローンを探す」で自分の機体にしてください")
+    message = flyer.start(ip, chase=marker)
+    return jsonify(ok=message is None, message=message)
+
+
+@app.post("/api/fly/chase/stop")
+def api_fly_chase_stop():
+    flyer.stop_chase()
+    return jsonify(ok=True)
+
+
 @app.post("/api/fly/move")
 def api_fly_move():
     body = request.get_json() or {}

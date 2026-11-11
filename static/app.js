@@ -614,12 +614,17 @@ function renderFly(s) {
   const f = s.fly;
   const up = f.phase === "starting" || f.phase === "flying" || f.phase === "landing";
   $("fly-start").hidden = up;
+  $("fly-chase-start").hidden = up;
+  $("fly-chase").hidden = f.chasing;
+  $("fly-chase").disabled = f.phase !== "flying";
+  $("fly-chase-stop").hidden = !f.chasing;
+  $("fly-chase-msg").textContent = f.chase_message;
   $("fly-land").hidden = !up;
   $("fly-emergency").hidden = !up;
   $("fly-pad").hidden = !up;
   $("fly-top-msg").textContent = !s.my_drone ? "先に「1. ドローンを探す」で自分の機体を選んでください" : f.message;
   $("fly-top-msg").className = f.phase === "done" && f.message !== "着陸しました" ? "msg error" : "msg";
-  for (const b of document.querySelectorAll("#fly-pad [data-c]")) b.disabled = f.phase !== "flying" || f.moving;
+  for (const b of document.querySelectorAll("#fly-pad [data-c]")) b.disabled = f.phase !== "flying" || f.moving || f.chasing;
   const lv = f.live;
   const pad = lv && lv.mid > 0 ? `パッド${lv.mid}が見えています（前${lv.x}・横${lv.y}・高さ${lv.z}cm）` : "パッドは見えていません";
   $("fly-info").textContent = (f.moving ? "動いています… ／ " : "") + pad +
@@ -665,6 +670,18 @@ if (page === "fly") {
     $("fly-top-msg").textContent = r.ok ? "離陸します…" : r.message;
     refresh();
   });
+  $("fly-chase-start").addEventListener("click", async () => {
+    if (!confirm("離陸して、すぐ緑を追いかけます（全速力で前進します）。周りに人や物がないか確認しましたか？")) return;
+    const r = await post("/api/fly/chase", { marker: "green" });
+    $("fly-top-msg").textContent = r.ok ? "離陸します…" : r.message;
+    refresh();
+  });
+  $("fly-chase").addEventListener("click", async () => {
+    const r = await post("/api/fly/chase", { marker: "green" });
+    $("fly-msg").textContent = r.ok ? "" : r.message;
+    refresh();
+  });
+  $("fly-chase-stop").addEventListener("click", () => post("/api/fly/chase/stop").then(refresh));
   $("fly-land").addEventListener("click", () => post("/api/fly/land").then(refresh));
   $("fly-emergency").addEventListener("click", () => post("/api/fly/emergency").then(refresh));
 }

@@ -39,6 +39,10 @@ class FreeFlight:
         self.message = ""
         self.log: list[str] = []
         self.started = 0.0
+        self.chasing = False  # the attack-drn colour chase is flying the drone
+        self.chase_message = ""
+        self._chase_req: str | None = None
+        self._chase_stop = threading.Event()
         self._moves: queue.Queue = queue.Queue()
         self._stop = threading.Event()
         self._last_sent = 0.0
@@ -46,7 +50,8 @@ class FreeFlight:
     def busy(self) -> bool:
         return self.phase in ("starting", "flying", "landing")
 
-    def start(self, ip: str) -> str | None:
+    def start(self, ip: str, chase: str | None = None) -> str | None:
+        """Take off. With chase="green", start the colour chase as soon as it is up."""
         with self.lock:
             if self.busy():
                 return "もう飛んでいます"
@@ -54,6 +59,7 @@ class FreeFlight:
                 return "高さやパッドの情報を受け取れません（8890番が使用中）"
             self._idle()
             self.phase, self.ip, self.started = "starting", ip, time.monotonic()
+            self._chase_req = chase
             self.message = "接続しています…"
         threading.Thread(target=self._run, daemon=True).start()
         return None
@@ -68,6 +74,8 @@ class FreeFlight:
             return f"{low}〜{high}で動かしてください"
         if self.phase != "flying":
             return "飛んでいる間だけ操作できます"
+        if self.chasing:
+            return "追いかけている間は操作できません"
         height = self._height()
         if command == "up" and height is not None and height + distance > HEIGHT_RANGE[1]:
             return f"{HEIGHT_RANGE[1]}cmより上には上げません"
@@ -78,13 +86,38 @@ class FreeFlight:
         self._moves.put(f"{command} {distance}")
         return None
 
+    def chase(self, marker: str = "green") -> str | None:
+        """While flying: hand the drone to the attack-drn chase (chases the colour, charges forward)."""
+        if self.phase != "flying":
+            return "飛んでいる間だけ使えます"
+        if self.chasing or self._chase_req:
+            return "もう追いかけています"
+        self._chase_req = marker
+        return None
+
+    def stop_chase(self) -> None:
+        """Stop chasing; the chase ends by landing, as in the original."""
+        self._chase_req = None
+        self._chase_stop.set()
+
+    def send(self, command: str, timeout: float = 12) -> str | None:
+        return self._send(command, timeout)
+
+    def raw(self, command: str) -> None:
+        self._raw(command)
+
+    def land_now(self) -> None:
+        self._land()
+
     def land(self) -> None:
+        self._chase_stop.set()
         self._stop.set()
         self._raw("stop")
 
     def emergency(self) -> None:
         """Cut the motors now (the drone drops)."""
         self._stop.set()
+        self._chase_stop.set()
         self.cut = True
         for _ in range(3):
             self._raw("emergency")
@@ -98,6 +131,7 @@ class FreeFlight:
         if not self.busy():
             return
         self._stop.set()
+        self._chase_stop.set()
         self.cut = True
         self.sock = self.sock or tello_net.tello_socket(0.5, self.ip)
         for _ in range(5):
@@ -114,7 +148,7 @@ class FreeFlight:
         live = {"mid": reading.get("mid"), "x": reading.get("x"), "y": reading.get("y"),
                 "z": reading.get("z"), "h": reading.get("h"), "bat": reading.get("bat")} if fresh else None
         return {"phase": self.phase, "message": self.message, "airborne": self.airborne,
-                "moving": self.moving, "live": live, "log": self.log[-8:],
+                "moving": self.moving, "chasing": self.chasing, "chase_message": self.chase_message, "live": live, "log": self.log[-8:],
                 "elapsed": round(time.monotonic() - self.started) if self.started and self.busy() else 0,
                 "limit": FLIGHT_SECONDS}
 
@@ -179,8 +213,42 @@ class FreeFlight:
             if sock:
                 sock.close()
 
+    def _run_chase(self, marker: str) -> None:
+        """attack-drn の追跡（tello_edu/）をそのまま動かす。終わりは元と同じく着陸。"""
+        self.chasing, self.chase_message = True, f"{marker}色を追いかけています"
+        self._note(self.chase_message)
+        self._chase_stop = threading.Event()
+        try:
+            from tello_edu.battle.auto_battle import AutoBattleConfig, AutoBattleSession
+            from tello_edu.battle.profiles import profile_from_settings
+            from tello_edu.battle.settings import load_settings
+            from tello_edu.session.edu_drone import EduDrone
+
+            settings = load_settings()
+            drone = EduDrone(self)
+            session = AutoBattleSession(
+                drone=drone, settings=settings, profile=profile_from_settings(settings),
+                config=AutoBattleConfig(marker=marker, stop_event=self._chase_stop),
+                frame_source=drone.read_frame)
+            result = session.run()
+            reason = f"（{result.get('reason')}）" if result.get("reason") else ""
+            self.chase_message = f"追跡が終わりました: {result.get('status')}{reason}"
+        except Exception as exc:  # the drone must not be left flying
+            self.chase_message = f"追跡に失敗しました: {exc}"
+        finally:
+            self.chasing = False
+            self._note(self.chase_message)
+            if self.airborne and not self.cut:
+                self._raw("rc 0 0 0 0")
+
     def _loop(self) -> None:
         while not self._stop.is_set():
+            if self._chase_req:
+                marker, self._chase_req = self._chase_req, None
+                self._run_chase(marker)
+                if not self.airborne:
+                    return
+                continue
             if time.monotonic() - self.started > FLIGHT_SECONDS:
                 self._note("時間が来たので着陸します")
                 return

@@ -54,12 +54,22 @@ try:
     moved = truth()["x"] - x0
     print("moved", round(moved), "cm; live:", call("/api/state")["fly"]["live"])
     assert 35 < moved < 65, moved
-    call("/api/fly/land", {})
+    # the attack-drn chase takes over while flying (the fake drone has no camera, so it only searches)
+    assert call("/api/fly/chase", {"marker": "purple"})["ok"] is False
+    assert call("/api/fly/chase", {"marker": "green"})["ok"]
+    for _ in range(50):
+        if call("/api/state")["fly"]["chasing"]: break
+        time.sleep(0.2)
+    f = call("/api/state")["fly"]; assert f["chasing"], f
+    assert call("/api/fly/move", {"cmd": "forward", "n": 40})["ok"] is False  # no stick moves while chasing
+    time.sleep(3)
+    assert truth()["flying"]
+    call("/api/fly/chase/stop", {})
     for _ in range(100):
         if call("/api/state")["fly"]["phase"] == "done": break
         time.sleep(0.2)
-    f = call("/api/state")["fly"]; print(f["phase"], f["message"]); print("\n".join(f["log"]))
-    assert f["phase"] == "done" and not truth()["flying"]
+    f = call("/api/state")["fly"]; print(f["phase"], f["message"], "|", f["chase_message"]); print("\n".join(f["log"]))
+    assert f["phase"] == "done" and not truth()["flying"] and not f["chasing"]
     print("OK")
 finally:
     app.terminate(); fake.terminate()

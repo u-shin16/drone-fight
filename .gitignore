@@ -10,3 +10,6 @@ plans/
 # local hand-off notes (they hold this LAN's addresses)
 CLAUDE_HANDOFF.md
 WORK_STATUS.md
+# attack-drn (another person's code, no licence): kept on this PC only
+tello_edu/
+config/

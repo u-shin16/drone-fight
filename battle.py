@@ -828,7 +828,7 @@ class StateMonitor:
                                       "bat": fields.get("bat"), "at": time.monotonic(),
                                       # mission pad: id (-1 = none) and our spot over it (cm)
                                       "mid": number("mid"), "x": number("x"), "y": number("y"),
-                                      "pad_yaw": pad_yaw}
+                                      "pad_yaw": pad_yaw, "raw": fields}
 
     def battery(self, ip: str | None, max_age: float = 3) -> str | None:
         reading = self.latest.get(ip or "")
