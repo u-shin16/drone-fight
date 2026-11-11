@@ -407,6 +407,39 @@ def api_arena_simple():
     return jsonify(ok=True)
 
 
+@app.post("/api/arena/manual")
+def api_arena_manual():
+    """The same pad map as a scan, typed in by hand (no flight).
+
+    'positions' is {pad id: [x, y]} in cm from the start pad of side A (pad 4 for eight
+    pads, pad 3 for the square): x is along the rocket direction (+ = ahead), y is
+    + toward the near side and - toward the far side, like the scan's map.
+    """
+    if (state["ready"] or state["start_at"] or scanner.active
+            or runner.phase in ("starting", "flying") or runner2.phase in ("starting", "flying")):
+        return jsonify(ok=False, message="準備OK・バトル中・スキャン中は変えられません")
+    body = request.get_json()
+    pads = body.get("pads")
+    kind = {4: "square4", 8: "pads8"}.get(pads) if isinstance(pads, (int, float)) and not isinstance(pads, bool) else None
+    if kind is None:
+        return jsonify(ok=False, message="パッドの枚数は4枚か8枚にしてください")
+    positions = body.get("positions")
+    if not isinstance(positions, dict):
+        return jsonify(ok=False, message="パッドの位置を入れてください")
+    starts = arena.SETS[kind]["starts"]
+    try:
+        field = scan.boundary(*(body.get(k) for k in ("back", "front", "far", "near")))
+        centers = {k: positions.get(k) for k in arena.SETS[kind]["ids"]}
+        centers[starts["A"]] = [0, 0]  # the origin pad, by definition
+        layout = arena.normalize({"pads": centers, "field": list(field),
+                                  "starts": {"A": [0, 0, 0], "B": [*(centers[starts["B"]] or [0, 0]), 180]},
+                                  "scanned_at": tello_net.now()})
+    except (ValueError, TypeError) as exc:
+        return jsonify(ok=False, message=str(exc))
+    save_scanned_arena(layout)
+    return jsonify(ok=True)
+
+
 @app.post("/api/arena/scan/stop")
 def api_arena_scan_stop():
     scanner.stop()

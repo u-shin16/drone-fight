@@ -342,11 +342,41 @@ const PHASE_TITLE = { idle: "まだスキャンしていません", running: "�
 
 let fieldKind = null;  // which tab the フィールド page shows: "pads" or "simple"
 let simpleLoaded = false;
+let manualLoaded = false;
 
 let padCount = null;  // how many pads the scan form is set up for: 4 (square 1 2 / 3 4) or 8
 
+// Default positions (cm from the origin pad) offered in the manual form.
+const MANUAL_DEFAULTS = {
+  4: { 1: [0, -110], 2: [110, -110], 3: [0, 0], 4: [110, 0] },
+  8: { 1: [0, -60], 2: [60, -60], 3: [120, -60], 4: [0, 0], 5: [60, 0], 6: [120, 0], 7: [30, 60], 8: [90, 60] },
+};
+let manualFor = null;  // the pad count the manual table is built for
+
+function buildManual(n, saved) {
+  manualFor = n;
+  const origin = n === 4 ? "3" : "4";
+  $("m-origin-pad").textContent = "パッド" + origin;
+  $("m-b-pad").textContent = "パッド" + (n === 4 ? 4 : 6);
+  const values = saved || MANUAL_DEFAULTS[n];
+  const body = $("m-pads");
+  body.innerHTML = "";
+  for (const id of Object.keys(MANUAL_DEFAULTS[n])) {
+    const tr = document.createElement("tr");
+    const isOrigin = id === origin;
+    tr.innerHTML = `<td>パッド${id}${isOrigin ? "（基準）" : ""}</td>` +
+      `<td><input type="number" step="1" data-pad="${id}" data-axis="0"${isOrigin ? " disabled" : ""}></td>` +
+      `<td><input type="number" step="1" data-pad="${id}" data-axis="1"${isOrigin ? " disabled" : ""}></td>`;
+    const [x, y] = values[id] || [0, 0];
+    tr.querySelector('[data-axis="0"]').value = x;
+    tr.querySelector('[data-axis="1"]').value = y;
+    body.appendChild(tr);
+  }
+}
+
 function showPadCount(n) {
   padCount = n;
+  if (manualFor !== n) buildManual(n, null);
   for (const b of document.querySelectorAll(".segment [data-pads]")) b.classList.toggle("on", Number(b.dataset.pads) === n);
   for (const ol of document.querySelectorAll("[data-for]")) ol.hidden = Number(ol.dataset.for) !== n;
   document.querySelector(".pad-count").textContent = n;
@@ -367,6 +397,7 @@ function showFieldKind(kind) {
   fieldKind = kind;
   for (const b of document.querySelectorAll(".segment [data-kind]")) b.classList.toggle("on", b.dataset.kind === kind);
   $("pads-card").hidden = kind !== "pads";
+  $("manual-card").hidden = kind !== "manual";
   $("simple-card").hidden = kind !== "simple";
   $("pad-badges").hidden = kind !== "pads";
 }
@@ -385,6 +416,13 @@ function renderField(s) {
     savedKind === "simple" ? `今の設定：パッドなし（2台の距離 ${s.arena.distance}cm）。相手の位置は予想です。` :
     `今の設定：パッドで正確に（スキャンした${savedPads}枚の地図）。`;
   for (const b of document.querySelectorAll(".segment [data-pads]")) b.disabled = running;
+  if (s.arena && savedKind === "pads" && !manualLoaded && padCount === savedPads) {
+    // Offer the saved map's numbers (relative to the origin pad) as the form's starting point.
+    buildManual(padCount, s.arena.pads);
+    const [x0, x1, y0, y1] = s.arena.field;
+    $("m-back").value = -x0; $("m-front").value = x1; $("m-far").value = -y0; $("m-near").value = y1;
+    manualLoaded = true;
+  }
   if (s.arena && savedKind === "simple" && !simpleLoaded) {
     $("s-distance").value = s.arena.distance; $("s-back").value = s.arena.back; $("s-side").value = s.arena.side;
     simpleLoaded = true;
@@ -600,6 +638,20 @@ if (page === "field") {
     const r = await post("/api/arena/simple", { distance: value("s-distance"), back: value("s-back"), side: value("s-side") });
     $("simple-msg").className = r.ok ? "msg ok-text" : "msg error";
     $("simple-msg").textContent = r.ok ? "保存しました。相手のPCにも同じ設定が届きます。" : r.message;
+    refresh();
+  });
+  $("manual-save").addEventListener("click", async () => {
+    const positions = {};
+    for (const input of document.querySelectorAll("#m-pads input")) {
+      const id = input.dataset.pad;
+      positions[id] = positions[id] || [0, 0];
+      positions[id][Number(input.dataset.axis)] = input.value === "" ? null : Number(input.value);
+    }
+    const value = (id) => $(id).value === "" ? null : Number($(id).value);
+    const r = await post("/api/arena/manual", { pads: padCount, positions, back: value("m-back"),
+      front: value("m-front"), far: value("m-far"), near: value("m-near") });
+    $("manual-msg").className = r.ok ? "msg ok-text" : "msg error";
+    $("manual-msg").textContent = r.ok ? "保存しました。相手のPCにも同じ地図が届きます。" : r.message;
     refresh();
   });
   const stopScan = () => post("/api/arena/scan/stop").then(refresh);

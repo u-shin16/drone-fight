@@ -5,6 +5,7 @@
     <h2>フィールドの種類</h2>
     <div class="segment" role="tablist">
       <button role="tab" data-kind="pads" class="on">パッドで正確に</button>
+      <button role="tab" data-kind="manual">手動で入力</button>
       <button role="tab" data-kind="simple">パッドなし（予測）</button>
     </div>
   </div>
@@ -26,6 +27,36 @@
   <div class="row" style="margin-top:14px">
     <button id="simple-save">この設定で保存</button>
     <span class="msg" id="simple-msg"></span>
+  </div>
+</section>
+
+<section class="card" id="manual-card" hidden>
+  <div class="picker-head">
+    <h2>パッドの位置を自分で入れる（飛ばさない）</h2>
+    <div class="segment" role="tablist" aria-label="パッドの枚数">
+      <button role="tab" data-pads="4" class="on">4枚（正方形）</button>
+      <button role="tab" data-pads="8">8枚</button>
+    </div>
+  </div>
+  <p style="margin-top:0">スキャンの代わりに、定規やメジャーで測った位置を入れて地図を作ります。ドローンは飛びません。パッドはスキャンのときと同じ並びで置いてください（4枚は奥から「1 2 ／ 3 4」、8枚は「1 2 3 ／ 4 5 6 ／ 7 8」。ロケットの向きはそろえる）。</p>
+  <p class="muted" style="margin:0 0 10px">位置は、<b id="m-origin-pad">パッド3</b>の中心を基準（0, 0）にして、各パッドの中心までの距離（cm）です。<b>前後</b>はロケットの向きが＋（うしろは−）、<b>奥手前</b>は手前が＋（奥は−）。基準のパッドは0のまま変えられません。</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>パッド</th><th>前後（前＋ / 後−）</th><th>奥手前（手前＋ / 奥−）</th></tr></thead>
+      <tbody id="m-pads"></tbody>
+    </table>
+  </div>
+  <p style="margin:14px 0 6px">基準のパッドから、<b>壁・人・家具にぶつからずに飛べる距離</b>（各50〜600cm）。この長方形の外には出ません。</p>
+  <div class="bounds">
+    <label>後ろ<input id="m-back" type="number" min="50" max="600" step="10" placeholder="cm"></label>
+    <label>前<input id="m-front" type="number" min="50" max="600" step="10" placeholder="cm"></label>
+    <label>奥<input id="m-far" type="number" min="50" max="600" step="10" placeholder="cm"></label>
+    <label>手前<input id="m-near" type="number" min="50" max="600" step="10" placeholder="cm"></label>
+  </div>
+  <p class="muted" style="font-size:13px;margin:10px 0 0">スタートは、A機が基準のパッド、B機が<b id="m-b-pad">パッド4</b>です。この2枚は100cm以上離してください。入れ間違いは、番号の並びや範囲の外を調べて、保存するときに教えます。</p>
+  <div class="row" style="margin-top:14px">
+    <button id="manual-save" class="big-button">この設定で保存</button>
+    <span class="msg" id="manual-msg"></span>
   </div>
 </section>
 

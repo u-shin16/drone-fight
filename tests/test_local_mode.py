@@ -107,5 +107,59 @@ class LocalModeTest(unittest.TestCase):
         self.assertEqual(tello_app.runner2.opponent_raw()[0]["x"], 10)
 
 
+class ManualArenaTest(unittest.TestCase):
+    """Typing the pad positions in by hand gives the same map a scan would."""
+
+    SQUARE = {"1": [0, -110], "2": [110, -110], "3": [0, 0], "4": [110, 0]}
+
+    def setUp(self):
+        self.client = tello_app.app.test_client()
+        tello_app.state.update(ready=False, start_at=None)
+        self.saved = tello_app.arena_layout, arena.save
+        arena.save = lambda value: arena.normalize(value)  # do not write a file in the test
+
+    def tearDown(self):
+        tello_app.arena_layout, arena.save = self.saved
+
+    def body(self, **changes):
+        return {"pads": 4, "positions": self.SQUARE, "back": 100, "front": 250, "far": 200, "near": 100, **changes}
+
+    def test_a_typed_square_is_saved_with_pad_3_as_the_origin(self):
+        r = post(self.client, "/api/arena/manual", self.body())
+        self.assertTrue(r["ok"], r)
+        saved = tello_app.arena_layout
+        self.assertEqual(saved["pads"]["3"], [0.0, 0.0])
+        self.assertEqual(saved["starts"]["A"], [0.0, 0.0, 0.0])
+        self.assertEqual(saved["starts"]["B"], [110.0, 0.0, 180.0])
+        self.assertEqual(saved["field"], [-100.0, 250.0, -200.0, 100.0])
+
+    def test_wrong_order_or_missing_pad_is_refused_with_a_message(self):
+        swapped = {**self.SQUARE, "1": [110, -110], "2": [0, -110]}
+        self.assertFalse(post(self.client, "/api/arena/manual", self.body(positions=swapped))["ok"])
+        missing = {k: v for k, v in self.SQUARE.items() if k != "2"}
+        self.assertFalse(post(self.client, "/api/arena/manual", self.body(positions=missing))["ok"])
+        self.assertFalse(post(self.client, "/api/arena/manual", self.body(pads=5))["ok"])
+
+    def test_the_two_start_pads_must_be_far_enough_apart(self):
+        close = {**self.SQUARE, "4": [60, 0], "2": [60, -110]}
+        r = post(self.client, "/api/arena/manual", self.body(positions=close))
+        self.assertFalse(r["ok"])
+        self.assertIn("100cm", r["message"])
+
+    def test_eight_pads_can_be_typed_too(self):
+        eight = {"1": [0, -60], "2": [60, -60], "3": [120, -60], "4": [0, 0], "5": [60, 0],
+                 "6": [120, 0], "7": [30, 60], "8": [90, 60]}
+        r = post(self.client, "/api/arena/manual", self.body(pads=8, positions=eight, back=100, front=250, far=150, near=150))
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(tello_app.arena_layout["starts"]["B"], [120.0, 0.0, 180.0])
+
+    def test_refused_while_ready(self):
+        tello_app.state["ready"] = True
+        try:
+            self.assertFalse(post(self.client, "/api/arena/manual", self.body())["ok"])
+        finally:
+            tello_app.state["ready"] = False
+
+
 if __name__ == "__main__":
     unittest.main()
