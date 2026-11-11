@@ -11,6 +11,7 @@ side A toward side B), y points to the right of them (toward pads 7-8).
 """
 
 import math
+import queue
 import statistics
 import threading
 import time
@@ -32,6 +33,10 @@ MAX_CLOSURE = 30      # cm: back over pad 4, our tracked position may be this fa
 MAX_YAW = 20          # degrees away from the rockets before we give up
 TIME_LIMIT = 360      # s at most for the whole scan (the route sets the actual limit)
 SECONDS_PER_STOP = 4.5  # move + settle per stop, used to size the time limit
+MANUAL_LIMIT = 400    # cm: how far from the origin pad a hand-flown scan may go (each way)
+MANUAL_TIME = 480     # s at most for a hand-flown scan (a Tello's battery lasts about 10 minutes)
+MANUAL_STEP_MAX = 100  # cm: the longest single move the player can order
+MANUAL_MARGIN = 60    # cm kept around the flown area and pads when the field is worked out
 START_BATTERY = 50
 LOW_BATTERY = 25
 STATE_TIMEOUT = 1.5   # s without a state packet = lost
@@ -154,7 +159,8 @@ def build_layout(pads: PadMap, field: tuple, closure: float | None) -> dict:
     missing = [str(k) for k in ids if not pads.sightings[k]]
     if missing:
         raise ValueError(f"パッド{'・'.join(missing)}が見つかりませんでした")
-    few = [str(k) for k in ids if len(pads.sightings[k]) < MIN_SEEN]
+    # The origin pad is (0, 0) by definition and is checked again by the loop back to it.
+    few = [str(k) for k in ids if k != origin and len(pads.sightings[k]) < MIN_SEEN]
     if few:
         raise ValueError(f"パッド{'・'.join(few)}は見えた回数が足りません（{MIN_SEEN}回以上必要）")
     for k in ids:
@@ -201,6 +207,10 @@ class ArenaScanner:
         self.stop_event = threading.Event()
         self.sock = None
         self.airborne = False
+        self.manual = False  # hand-flown: the player orders each move
+        self.moving = False
+        self.commands: queue.Queue = queue.Queue()
+        self.trail: list[tuple[float, float]] = []  # where we have been (tracked), to size the field
 
     @property
     def active(self) -> bool:
@@ -229,6 +239,48 @@ class ArenaScanner:
         threading.Thread(target=self._run, args=(on_success,), daemon=True).start()
         return None
 
+    def start_manual(self, ip: str, on_success, kind: str = "pads8") -> str | None:
+        """Begin a scan the player flies by hand: they order each move, the app reads the pads.
+
+        The safe field is worked out at the end from where the drone went. Returns an
+        error message instead if it cannot start.
+        """
+        with self.lock:
+            if self.active:
+                return "スキャン中です"
+            if kind not in arena.SETS:
+                return "パッドの枚数は4枚か8枚にしてください"
+            if not self.monitor.listening:
+                return "高さやパッドの情報を受け取れません（8890番が使用中）"
+            self._clear()
+            self.kind = kind
+            self.pads = PadMap(kind)
+            self.manual = True
+            self.phase, self.ip = "running", ip
+            self.field = (-MANUAL_LIMIT, MANUAL_LIMIT, -MANUAL_LIMIT, MANUAL_LIMIT)  # a limit to stay inside
+            self.time_limit = MANUAL_TIME
+            self.started = time.monotonic()
+        threading.Thread(target=self._run, args=(on_success,), daemon=True).start()
+        return None
+
+    def command(self, action: str, dx: float = 0.0, dy: float = 0.0) -> str | None:
+        """An order from the player in a hand-flown scan; returns why it was refused, else None."""
+        if not (self.active and self.manual and self.airborne):
+            return "手動スキャンで飛んでいる間だけ使えます"
+        if action == "finish":
+            self.commands.put(("finish",))
+            return None
+        if action != "move":
+            return "命令が不正です"
+        if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) for v in (dx, dy)):
+            return "動かす距離を数字で入れてください"
+        if abs(dx) > MANUAL_STEP_MAX or abs(dy) > MANUAL_STEP_MAX or (abs(dx) < 20 and abs(dy) < 20):
+            return f"20〜{MANUAL_STEP_MAX}cmで動かしてください"
+        if self.moving or not self.commands.empty():
+            return "いま動いています。止まってから押してください"
+        self.commands.put(("move", float(dx), float(dy)))
+        return None
+
     def stop(self) -> None:
         self.stop_event.set()
 
@@ -237,6 +289,7 @@ class ArenaScanner:
                 "kind": self.kind, "origin": self.pads.origin,
                 "pads": self.pads.summary(), "pose": [round(v) for v in self.pose],
                 "field": list(self.field) if self.field else None,
+                "manual": self.manual, "moving": self.moving, "airborne": self.airborne,
                 "progress": [self.stops_done, self.stops_total], "time_limit": round(self.time_limit),
                 "elapsed": round(time.monotonic() - self.started) if self.started else 0}
 
@@ -332,12 +385,15 @@ class ArenaScanner:
         if sighting:
             pad, offset = sighting
             self.pose = self.pads.observe(pad, offset, self.pose)
+        self.trail.append(self.pose)
 
     def _run(self, on_success) -> None:
         try:
             self.sock = tello_net.tello_socket(0.2, self.ip)
             self._fly()
             self._land()
+            if self.manual:
+                self.field = self._worked_out_field()
             layout = build_layout(self.pads, self.field, self.closure)
             on_success(layout)
             self.phase, self.message = "done", f"{len(self.pads.ids)}枚の地図を保存しました"
@@ -382,13 +438,16 @@ class ArenaScanner:
         self.pose = self.pads.observe(origin, start[1], (0.0, 0.0))
         self._note(f"パッド{origin}を確認。スキャンを始めます")
 
-        for point in route(self.field, self.kind):
-            self._go_to(point)
-            self.stops_done += 1
-            if self.pads.done():
-                self._note(f"{len(self.pads.ids)}枚とも十分に見えたので、パッド{origin}へ戻ります")
-                break
-        self._revisit()
+        if self.manual:
+            self._manual_loop()
+        else:
+            for point in route(self.field, self.kind):
+                self._go_to(point)
+                self.stops_done += 1
+                if self.pads.done():
+                    self._note(f"{len(self.pads.ids)}枚とも十分に見えたので、パッド{origin}へ戻ります")
+                    break
+            self._revisit()
         # Back to the origin pad, reading pads on the way. How far our tracked position is
         # from it when we get there shows whether the map can be trusted.
         for dx, dy in hops(self.pose, (0.0, 0.0)):
@@ -404,6 +463,46 @@ class ArenaScanner:
             self._note(f"パッド{origin}に戻りました（1周のズレ {self.closure:.0f}cm）")
         else:
             self._note(f"戻った場所でパッド{origin}が見えませんでした")
+
+    def _manual_loop(self) -> None:
+        """Wait for the player's orders; 'finish' is accepted once every pad is measured well enough."""
+        self._note("手動で動かしてください。全部のパッドの上を2回以上通ったら「終わって戻る」を押します")
+        while True:
+            self._guard()
+            try:
+                order = self.commands.get(timeout=0.2)
+            except queue.Empty:
+                continue
+            if order[0] == "finish":
+                problem = self._not_measured()
+                if problem:
+                    self._note(problem)
+                    continue
+                self._note("全部のパッドを測れました。基準のパッドへ戻ります")
+                return
+            self.moving = True
+            try:
+                self._go_to((self.pose[0] + order[1], self.pose[1] + order[2]))
+                self.stops_done += 1
+            finally:
+                self.moving = False
+
+    def _not_measured(self) -> str | None:
+        """Why a hand-flown scan cannot finish yet, or None when every pad is measured well enough."""
+        for pad in self.pads.ids:
+            if pad != self.pads.origin and len(self.pads.sightings[pad]) < MIN_SEEN:
+                return f"まだ終われません: パッド{pad}の上を通った回数が足りません（{MIN_SEEN}回以上必要）"
+            if self.pads.spread(pad) > MAX_SPREAD:
+                return (f"まだ終われません: パッド{pad}の位置がそろいません（ズレ{self.pads.spread(pad):.0f}cm）。"
+                        "もう一度、別の向きから通ってください")
+        return None
+
+    def _worked_out_field(self) -> tuple[float, float, float, float]:
+        """The area the drone flew and the pads cover, plus a margin: the field of a hand-flown scan."""
+        points = list(self.trail) + [c for c in (self.pads.center(k) for k in self.pads.ids) if c]
+        xs, ys = [p[0] for p in points] + [0.0], [p[1] for p in points] + [0.0]
+        return (round(min(xs) - MANUAL_MARGIN, 1), round(max(xs) + MANUAL_MARGIN, 1),
+                round(min(ys) - MANUAL_MARGIN, 1), round(max(ys) + MANUAL_MARGIN, 1))
 
     def _go_to(self, point: tuple[float, float]) -> None:
         # Look after every hop, not only at the end: a long way (changing sweep lane,

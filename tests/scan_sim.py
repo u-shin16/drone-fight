@@ -9,6 +9,8 @@ argv: scenario [index]
   start5     the drone is put on pad 5 instead of pad 4
   yaw        the body slowly turns away from the rockets
   square4    four pads in a square, 1 2 / 3 4, taking off from pad 3
+  manual     8 pads, hand-flown: a pilot script orders the moves, like the player's buttons
+  manual4    the square, hand-flown
 The fake world puts pad 4 away from (0, 0) so the "relative to pad 4" maths is tested too.
 """
 import json, math, os, subprocess, sys, tempfile, time, urllib.request
@@ -19,7 +21,8 @@ index = int(sys.argv[2]) if len(sys.argv) > 2 else 0
 APP = Path(__file__).resolve().parents[1]
 PY = sys.executable
 SP = Path(tempfile.mkdtemp(prefix=f"tello-scan-{scenario}-"))
-SQUARE = scenario == "square4"
+SQUARE = scenario in ("square4", "manual4")
+MANUAL = scenario.startswith("manual")
 PAD4 = (37.0, -12.0)  # where the origin pad is (pad 3 for the square)
 # 1 2 3 / 4 5 6 / 7 8, irregular, relative to pad 4.
 RELATIVE = {1: (-40, -110), 2: (60, -120), 3: (170, -100), 4: (0, 0),
@@ -60,8 +63,59 @@ try:
     sn = call("/api/state")["drones"][0]["sn"]
     assert call("/api/claim", {"sn": sn})["ok"]
     began = time.time()
-    reply = call("/api/arena/scan", {"pads": 4 if SQUARE else 8, "back": 80, "front": 260, "far": 170, "near": 180})
+    if MANUAL:
+        reply = call("/api/arena/scan/manual", {"pads": 4 if SQUARE else 8})
+    else:
+        reply = call("/api/arena/scan", {"pads": 4 if SQUARE else 8, "back": 80, "front": 260, "far": 170, "near": 180})
     assert reply["ok"], reply
+    if MANUAL:
+        # The player's job: wait until it is up, then order moves over every pad twice, then finish.
+        origin = 3 if SQUARE else 4
+        while call("/api/state")["arena_scan"]["airborne"] is False:
+            time.sleep(0.3)
+            assert time.time() - began < 60, "never took off"
+        visits = []
+        for k, (x, y) in RELATIVE.items():
+            if k != origin:
+                visits += [(x, y), (x + 25, y + 20)]  # the second pass comes from another side
+        for target in visits:
+            for _ in range(40):
+                sc0 = call("/api/state")["arena_scan"]
+                px, py = sc0["pose"][0], sc0["pose"][1]
+                dx, dy = target[0] - px, target[1] - py
+                if math.hypot(dx, dy) < 25:
+                    break
+                scale = min(1.0, 80 / max(abs(dx), abs(dy)))
+                step = {"dx": round(dx * scale), "dy": round(dy * scale)}
+                if abs(step["dx"]) < 20 and abs(step["dy"]) < 20:
+                    break
+                done = sc0["progress"][0]
+                r = call("/api/arena/scan/move", step)
+                assert r["ok"], r
+                while call("/api/state")["arena_scan"]["progress"][0] == done:
+                    time.sleep(0.2)
+                    assert time.time() - began < 300, "move never finished"
+        # Like the player: look at the counts and go back over any pad that was passed too few times.
+        for attempt in range(4):
+            sc0 = call("/api/state")["arena_scan"]
+            lacking = [k for k, v in sc0["pads"].items() if int(k) != origin and v["seen"] < 2]
+            print("pads seen:", {k: v["seen"] for k, v in sc0["pads"].items()}, "lacking:", lacking)
+            if not lacking:
+                break
+            for k in lacking:
+                cx, cy = sc0["pads"][k]["center"]
+                for target in ((cx + 15 * (attempt + 1), cy), (cx, cy + 15 * (attempt + 1))):
+                    for _ in range(20):
+                        px, py = call("/api/state")["arena_scan"]["pose"][:2]
+                        dx, dy = target[0] - px, target[1] - py
+                        if abs(dx) < 20 and abs(dy) < 20:
+                            break
+                        scale = min(1.0, 80 / max(abs(dx), abs(dy)))
+                        done = call("/api/state")["arena_scan"]["progress"][0]
+                        assert call("/api/arena/scan/move", {"dx": round(dx * scale), "dy": round(dy * scale)})["ok"]
+                        while call("/api/state")["arena_scan"]["progress"][0] == done:
+                            time.sleep(0.2)
+        print("finish:", call("/api/arena/scan/finish", {}))
     stopped = False
     while True:
         s = call("/api/state")
@@ -70,8 +124,9 @@ try:
             break
         if scenario == "stop" and time.time() - began > 15 and not stopped:
             call("/api/arena/scan/stop", {}); stopped = True
-        if time.time() - began > 240:
-            raise SystemExit("scan did not finish in 240 s")
+        if time.time() - began > (440 if MANUAL else 240):
+            print("\n".join(sc["log"][-6:]))
+            raise SystemExit("scan did not finish in time")
         time.sleep(0.5)
     time.sleep(1)
     true = json.loads((SP / "true.json").read_text())

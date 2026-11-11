@@ -89,10 +89,34 @@
   </div>
   <div class="row" style="margin-top:14px">
     <button id="scan-start" class="big-button">スキャン開始（離陸します）</button>
+    <button id="scan-manual" class="big-button ghost">手動で飛ばしてスキャン（離陸します）</button>
     <button id="scan-stop" class="stop big-button" hidden>停止して着陸</button>
     <span class="msg" id="scan-msg"></span>
   </div>
   <p class="muted" style="font-size:13px;margin:10px 0 0">高さ100cm・秒速60cmで、範囲の中を往復しながらパッドを読みます。全部のパッドが2回以上見えて位置がそろったらすぐ終わり、スタートしたパッドへ戻ります。広さに合わせた時間の上限があり（最大6分）、戻ったときのズレが30cm以内のときだけ保存します。どれか1つでもだめなら着陸して保存しません。電池50%以上が必要です。Escキーでも停止して着陸します。</p>
+</section>
+
+<section class="card" id="manual-fly" hidden>
+  <h2>手動で飛ばす</h2>
+  <p style="margin-top:0">矢印キー（またはボタン）で動かします。地図の<b>右がロケットの向き（前）</b>で、ドローンは向きを変えずに平行に動きます。<b>全部のパッドの上を、2回以上（別の方向から）</b>通ってください。パッドが見えると自動で位置を測ります。</p>
+  <div class="row" style="align-items:center;gap:24px;flex-wrap:wrap">
+    <div class="dpad" style="display:grid;grid-template-columns:repeat(3,64px);grid-template-rows:repeat(3,48px);gap:6px">
+      <span></span><button class="ghost" data-dx="0" data-dy="-1" title="奥へ（↑）">↑ 奥</button><span></span>
+      <button class="ghost" data-dx="-1" data-dy="0" title="後ろへ（←）">← 後</button><span></span><button class="ghost" data-dx="1" data-dy="0" title="前へ（→）">前 →</button>
+      <span></span><button class="ghost" data-dx="0" data-dy="1" title="手前へ（↓）">↓ 手前</button><span></span>
+    </div>
+    <div>
+      <label>1回で動く距離
+        <select id="fly-step"><option value="30">30cm</option><option value="50" selected>50cm</option><option value="100">100cm</option></select>
+      </label>
+      <p class="muted" id="fly-status" style="margin:8px 0 0"></p>
+      <p class="error" id="fly-msg" style="margin:4px 0 0"></p>
+    </div>
+  </div>
+  <div class="row" style="margin-top:14px">
+    <button id="fly-finish" class="big-button">終わって戻る（基準のパッドへ戻って着陸・保存）</button>
+  </div>
+  <p class="muted" style="font-size:13px;margin:10px 0 0">全部のパッドが2回以上測れていないと、「終わって戻る」は断られます（足りないパッドは下の一覧で確認）。壁・人・物に近づいたら、すぐ「停止して着陸」（Esc）。飛べる範囲は、飛んだ場所とパッドの位置から自動で決めます。</p>
 </section>
 
 <section class="card arena">

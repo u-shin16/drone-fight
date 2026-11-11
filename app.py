@@ -392,6 +392,35 @@ def api_arena_scan():
     return jsonify(ok=message is None, message=message)
 
 
+@app.post("/api/arena/scan/manual")
+def api_arena_scan_manual():
+    """Fly our own drone by hand over the pads: the player orders each move (no declared field)."""
+    if state["ready"] or state["start_at"] or runner.phase in ("starting", "flying"):
+        return jsonify(ok=False, message="準備OK・バトル中はスキャンできません")
+    ip = (my_drone() or {}).get("ip")
+    if not ip:
+        return jsonify(ok=False, message="自分のドローンがわかりません。「1. ドローンを探す」で自分の機体にしてください")
+    pads = request.get_json().get("pads", 8)
+    kind = {4: "square4", 8: "pads8"}.get(pads) if isinstance(pads, (int, float)) else None
+    if kind is None:
+        return jsonify(ok=False, message="パッドの枚数は4枚か8枚にしてください")
+    message = scanner.start_manual(ip, save_scanned_arena, kind)
+    return jsonify(ok=message is None, message=message)
+
+
+@app.post("/api/arena/scan/move")
+def api_arena_scan_move():
+    body = request.get_json()
+    message = scanner.command("move", body.get("dx", 0), body.get("dy", 0))
+    return jsonify(ok=message is None, message=message)
+
+
+@app.post("/api/arena/scan/finish")
+def api_arena_scan_finish():
+    message = scanner.command("finish")
+    return jsonify(ok=message is None, message=message)
+
+
 @app.post("/api/arena/simple")
 def api_arena_simple():
     """No-pad mode: just the start distance and the room around the two drones."""

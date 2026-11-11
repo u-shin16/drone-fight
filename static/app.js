@@ -405,6 +405,14 @@ function showFieldKind(kind) {
 function renderField(s) {
   const sc = s.arena_scan;
   const running = sc.phase === "running";
+  const flyingByHand = running && sc.manual;
+  $("manual-fly").hidden = !flyingByHand;
+  if (flyingByHand) {
+    for (const b of document.querySelectorAll("#manual-fly .dpad button")) b.disabled = sc.moving || !sc.airborne;
+    $("fly-finish").disabled = sc.moving || !sc.airborne;
+    $("fly-status").textContent = (!sc.airborne ? "離陸しています…" : sc.moving ? "動いています…" : "待っています。動かしてください")
+      + (sc.log.length ? " ／ " + sc.log[sc.log.length - 1].slice(9) : "");
+  }
   const savedKind = s.arena ? (s.arena.kind === "simple" ? "simple" : "pads") : null;
   if (fieldKind === null) showFieldKind(running ? "pads" : (savedKind || "pads"));
   if (padCount === null) {
@@ -439,12 +447,14 @@ function renderField(s) {
     return;
   }
   $("scan-start").hidden = running;
+  $("scan-manual").hidden = running;
   $("scan-stop").hidden = !running;
   for (const id of ["b-back", "b-front", "b-far", "b-near"]) $(id).disabled = running;
   $("scan-title").textContent = sc.phase === "idle" && s.arena ? "保存済みの地図" : PHASE_TITLE[sc.phase];
   $("scan-title").className = sc.phase === "failed" ? "error" : sc.phase === "done" ? "ok-text" : "";
   $("scan-progress").textContent = sc.phase === "idle" ? "" :
-    (running ? `止まって読んだ場所 ${sc.progress[0]} / ${sc.progress[1]} ・ ${sc.elapsed}秒（${sc.time_limit}秒まで）` : sc.message);
+    (running ? (sc.manual ? `手動で操作中 ・ 動かした回数 ${sc.progress[0]} ・ ${sc.elapsed}秒（${sc.time_limit}秒まで）`
+      : `止まって読んだ場所 ${sc.progress[0]} / ${sc.progress[1]} ・ ${sc.elapsed}秒（${sc.time_limit}秒まで）`) : sc.message);
   $("scan-log").textContent = sc.log.join("\n");
   $("scan-sync").textContent = arenaSyncText(s, s.matching ? s.peers[0] : null);
 
@@ -652,6 +662,37 @@ if (page === "field") {
       front: value("m-front"), far: value("m-far"), near: value("m-near") });
     $("manual-msg").className = r.ok ? "msg ok-text" : "msg error";
     $("manual-msg").textContent = r.ok ? "保存しました。相手のPCにも同じ地図が届きます。" : r.message;
+    refresh();
+  });
+  // Hand-flown scan: the buttons and the arrow keys order one move each (map axes: right = ahead).
+  const fly = async (dx, dy) => {
+    const step = Number($("fly-step").value);
+    const r = await post("/api/arena/scan/move", { dx: dx * step, dy: dy * step });
+    $("fly-msg").textContent = r.ok ? "" : r.message;
+    refresh();
+  };
+  for (const b of document.querySelectorAll("#manual-fly .dpad button")) {
+    b.addEventListener("click", () => fly(Number(b.dataset.dx), Number(b.dataset.dy)));
+  }
+  const ARROWS = { ArrowRight: [1, 0], ArrowLeft: [-1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+  document.addEventListener("keydown", (e) => {
+    if ($("manual-fly").hidden || !ARROWS[e.key] || e.target.tagName === "SELECT" || e.target.tagName === "INPUT") return;
+    e.preventDefault();
+    fly(...ARROWS[e.key]);
+  });
+  $("fly-finish").addEventListener("click", async () => {
+    const r = await post("/api/arena/scan/finish");
+    $("fly-msg").textContent = r.ok ? "" : r.message;
+    refresh();
+  });
+  $("scan-manual").addEventListener("click", async () => {
+    const origin = padCount === 4 ? 3 : 4;
+    if (!confirm(`パッド${origin}の中心から離陸して、手動で飛ばします。周りに人や物がないか確認しましたか？`)) return;
+    $("scan-msg").className = "msg";
+    $("scan-msg").textContent = "離陸します…";
+    const r = await post("/api/arena/scan/manual", { pads: padCount });
+    $("scan-msg").className = r.ok ? "msg" : "msg error";
+    $("scan-msg").textContent = r.ok ? "" : r.message;
     refresh();
   });
   const stopScan = () => post("/api/arena/scan/stop").then(refresh);

@@ -169,5 +169,49 @@ class PadMapTest(unittest.TestCase):
             scan.build_layout(swapped, FIELD, 10)
 
 
+class ManualScanTest(unittest.TestCase):
+    """The hand-flown scan: orders from the player, when it may finish, and the field it works out."""
+
+    def scanner(self, airborne=True):
+        s = scan.ArenaScanner(type("Monitor", (), {"listening": True, "latest": {}})())
+        s.kind, s.pads, s.manual, s.phase, s.airborne = "square4", scan.PadMap("square4"), True, "running", airborne
+        return s
+
+    def test_orders_are_checked(self):
+        s = self.scanner()
+        self.assertIsNone(s.command("move", 50, 0))
+        self.assertIsNotNone(s.command("move", 0, 50))  # still busy with the last order
+        s = self.scanner()
+        for dx, dy in ((10, 5), (150, 0), (float("nan"), 30), (True, 30)):
+            self.assertIsNotNone(s.command("move", dx, dy), (dx, dy))
+        self.assertIsNotNone(self.scanner(airborne=False).command("move", 50, 0))  # not up yet
+        idle = self.scanner()
+        idle.phase = "idle"
+        self.assertIsNotNone(idle.command("move", 50, 0))
+
+    def test_it_cannot_finish_until_every_pad_is_measured_twice_and_agrees(self):
+        s = self.scanner()
+        self.assertIn("パッド1", s._not_measured())
+        for pad in (1, 2, 4):
+            s.pads.sightings[pad] = [(10.0, 10.0), (12.0, 11.0)]
+        self.assertIsNone(s._not_measured())  # the origin (3) needs no count: the trip home checks it
+        s.pads.sightings[2] = [(10.0, 10.0), (100.0, 10.0)]
+        self.assertIn("パッド2", s._not_measured())
+
+    def test_the_field_covers_the_pads_and_the_flight_with_a_margin(self):
+        s = self.scanner()
+        s.pads.sightings.update({1: [(0.0, -110.0)] * 2, 2: [(110.0, -110.0)] * 2, 4: [(110.0, 0.0)] * 2})
+        s.trail = [(130.0, 20.0), (-30.0, -120.0)]
+        x0, x1, y0, y1 = s._worked_out_field()
+        self.assertEqual((x0, x1, y0, y1), (-30 - scan.MANUAL_MARGIN, 130 + scan.MANUAL_MARGIN,
+                                            -120 - scan.MANUAL_MARGIN, 20 + scan.MANUAL_MARGIN))
+        layout = scan.build_layout(self.measured(s), (x0, x1, y0, y1), 5.0)
+        self.assertEqual(layout["starts"]["B"], [110.0, 0.0, 180.0])
+
+    def measured(self, s):
+        s.pads.sightings[3] = [(0.0, 0.0)]  # the sighting at take-off
+        return s.pads
+
+
 if __name__ == "__main__":
     unittest.main()
