@@ -641,9 +641,8 @@ function renderFly(s) {
   $("fly-top-msg").className = f.phase === "done" && f.message !== "着陸しました" ? "msg error" : "msg";
   for (const b of document.querySelectorAll("#fly-pad [data-c]")) b.disabled = f.phase !== "flying" || f.moving || f.chasing;
   const lv = f.live;
-  const pad = lv && lv.mid > 0 ? `パッド${lv.mid}が見えています（前${lv.x}・横${lv.y}・高さ${lv.z}cm）` : "パッドは見えていません";
-  $("fly-info").textContent = (f.moving ? "動いています… ／ " : "") + pad +
-    (lv && lv.h != null ? ` ／ 高さ${lv.h}cm` : "") + (lv && lv.bat ? ` ／ 電池${lv.bat}%` : "") +
+  $("fly-info").textContent = (f.moving ? "動いています… ／ " : "") +
+    (lv && lv.h != null ? `高さ${lv.h}cm` : "高さ—") + (lv && lv.bat ? ` ／ 電池${lv.bat}%` : "") +
     (up ? ` ／ ${f.elapsed}秒（${f.limit}秒まで）` : "");
   $("fly-log").textContent = f.log.join("\n");
 }

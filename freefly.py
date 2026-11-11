@@ -48,6 +48,7 @@ class FreeFlight:
         self._moves: queue.Queue = queue.Queue()
         self._stop = threading.Event()
         self._last_sent = 0.0
+        self._camera_asked, self._camera_tries = 0.0, 0
 
     def busy(self) -> bool:
         return self.phase in ("starting", "flying", "landing")
@@ -197,8 +198,9 @@ class FreeFlight:
             battery = self._send("battery?", 5)
             if not battery or not battery.isdigit() or int(battery) < MIN_BATTERY:
                 return self._finish(f"電池が{MIN_BATTERY}%未満なので離陸しません（{battery}）")
-            self._send("mon", 5)  # so the pad under the drone shows up; not needed to fly
-            self._send("mdirection 0", 5)
+            # Mission-pad detection (mon) and the front camera's video do not get along on a Tello EDU,
+            # so pads are switched off here: this page wants the picture.
+            self._send("moff", 5)
             self._note(f"離陸します（電池 {battery}%）")
             self.airborne = True
             if self._send("takeoff", 20) != "ok":
@@ -211,6 +213,7 @@ class FreeFlight:
                     break
                 time.sleep(0.5)
             self._note(f"カメラを起動: {self.camera.reply}")
+            self._camera_asked, self._camera_tries = time.monotonic(), 0
             self.camera.start()
             self.message = "飛んでいます。矢印キーかボタンで動かせます"
             self._note("離陸しました")
@@ -222,6 +225,20 @@ class FreeFlight:
             sock, self.sock = self.sock, None
             if sock:
                 sock.close()
+
+    def _watch_camera(self) -> None:
+        """No video data 4 s after streamon: switch the stream off and on again (up to 3 times)."""
+        cam = self.camera
+        if not cam.on or cam.packets or self.chasing or self._camera_tries >= 3:
+            return
+        if time.monotonic() - self._camera_asked < 4:
+            return
+        self._camera_tries += 1
+        self._send("streamoff", 3)
+        time.sleep(0.3)
+        cam.reply = self._send("streamon", 5) or "返事なし"
+        self._camera_asked = time.monotonic()
+        self._note(f"映像が届かないので、カメラをもう一度起動しました（{self._camera_tries}回目）: {cam.reply}")
 
     def _run_chase(self, marker: str) -> None:
         """attack-drn の追跡（tello_edu/）をそのまま動かす。終わりは元と同じく着陸。"""
@@ -261,6 +278,7 @@ class FreeFlight:
                 if not self.airborne:
                     return
                 continue
+            self._watch_camera()
             if time.monotonic() - self.started > FLIGHT_SECONDS:
                 self._note("時間が来たので着陸します")
                 return
