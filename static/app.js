@@ -478,7 +478,18 @@ function renderField(s) {
   if (showScan && sc.field) {
     const pads = {};
     for (const k of ids) pads[k] = sc.pads[k].center;
-    drawMap($("scan-map"), sc.field, pads, null,
+    let field = sc.field;
+    if (running && sc.manual) {
+      // A blank map that grows: just big enough for the origin, the drone and the pads read so far.
+      const pts = [[0, 0], [sc.pose[0], sc.pose[1]], ...Object.values(pads).filter(Boolean)];
+      const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+      let [x0, x1, y0, y1] = [Math.min(...xs) - 90, Math.max(...xs) + 90, Math.min(...ys) - 90, Math.max(...ys) + 90];
+      for (const [lo, hi, set] of [[x0, x1, (a, b) => { x0 = a; x1 = b; }], [y0, y1, (a, b) => { y0 = a; y1 = b; }]]) {
+        if (hi - lo < 300) set((lo + hi) / 2 - 150, (lo + hi) / 2 + 150);
+      }
+      field = [x0, x1, y0, y1];
+    }
+    drawMap($("scan-map"), field, pads, null,
       [{ pos: running ? { x: sc.pose[0], y: sc.pose[1], heading: 0 } : null, cls: "me", label: "あなた" }]);
   } else if (s.arena) {
     drawMap($("scan-map"), s.arena.field, s.arena.pads, s.arena.starts, []);
