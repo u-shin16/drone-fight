@@ -32,6 +32,15 @@ function renderHeader(s) {
 function renderDrones(s) {
   // On a Tello's own Wi-Fi, offer the router setup right here.
   $("join-card").hidden = !(s.mode === "direct" && s.drones.length);
+  const fly = s.gesture_fly || { phase: "idle", message: "" };
+  const flying = fly.phase === "starting" || fly.phase === "flying";
+  if ($("gesture-card")) {
+    $("gesture-card").hidden = !s.my_drone;
+    $("gesture-fly-msg").textContent = fly.message || "";
+    $("gesture-go").hidden = flying;
+    $("gesture-land").hidden = !flying;
+    if (window.Gesture) Gesture.setVisible(!!s.my_drone, flying);
+  }
   $("scan").disabled = s.scanning;
   $("scan-msg").textContent = s.message + (s.scanned_at ? "（" + s.scanned_at + "）" : "");
   if (editing) return;
@@ -501,6 +510,13 @@ function renderField(s) {
   }
 }
 
+function gestureWanted(s) {
+  const keys = s.start_at
+    ? [s.me && s.me.plan_key, s.local ? s.me_b && s.me_b.plan_key : null]
+    : [s.plan_key, s.local ? s.plan_key_b : null];
+  return keys.some((key) => key && (s.choices.find((c) => c.key === key) || {}).gesture);
+}
+
 function renderBattle(s) {
   const opponent = s.matching ? s.peers[0] : null;
   $("no-match").hidden = !!opponent;
@@ -508,7 +524,10 @@ function renderBattle(s) {
   $("room-part2").hidden = !opponent;
   $("arena-status").hidden = !!s.start_at;
   $("arena-sync").textContent = arenaSyncText(s, opponent);
-  if (!opponent) return;
+  if (!opponent) {
+    if (window.Gesture) Gesture.setVisible(false, false);
+    return;
+  }
   setPlayerCard("me", s.local ? "A機" : s.player, s.my_drone, s.ready);
   setPlayerCard("op", opponent.player, opponent.drone, opponent.ready);
   const whoLabels = document.querySelectorAll(".room-card .who");
@@ -553,6 +572,7 @@ function renderBattle(s) {
     $("ready").disabled = !s.plan || (s.local && !s.plan_b) || (!s.ready && (!s.arena || opponent.arena_hash !== s.arena_hash));
     $("room-status").textContent = planText + " ／ " + (s.ready && opponent.ready ? "まもなくスタート！"
       : s.ready ? "相手の準備を待っています…" : "準備ができたら「準備OK」を押してください");
+    if (window.Gesture) Gesture.setVisible(gestureWanted(s), false);
     return;
   }
 
@@ -606,6 +626,7 @@ function renderBattle(s) {
     $("result-reason").textContent = s.local ? s.result.reason.replaceAll("相手", "B機").replaceAll("自分", "A機") : s.result.reason;
     $("rematch").disabled = up(s.me) || (s.local && up(s.me_b));
   }
+  if (window.Gesture) Gesture.setVisible(gestureWanted(s) && !finished, !finished);
 }
 
 let started = false;  // no screen updates until a reload's reset has finished
@@ -709,6 +730,19 @@ if (page === "fly") {
 }
 if (page === "drones") {
   $("scan").addEventListener("click", async () => { await post("/api/scan"); refresh(); });
+  $("gesture-go").addEventListener("click", async () => {
+    if (!confirm("自分の機体が離陸します。周りに人や物がないか確認しましたか？")) return;
+    const r = await post("/api/gesture-fly", { action: "start" });
+    $("gesture-fly-msg").textContent = r.ok ? "離陸します…" : r.message;
+    refresh();
+  });
+  $("gesture-land").addEventListener("click", () => post("/api/gesture-fly", { action: "land" }).then(refresh));
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !$("gesture-land").hidden) {
+      e.preventDefault();
+      post("/api/gesture-fly", { action: "land" }).then(refresh);
+    }
+  });
 }
 if (page === "peers") {
   $("code").addEventListener("input", () => $("code").value = $("code").value.replace(/\D/g, "").slice(0, 4));

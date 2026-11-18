@@ -48,6 +48,16 @@
 
 <div id="room-part2" hidden>
 
+  <section class="card" id="gesture-card" hidden>
+    <h2>手振りで動かす</h2>
+    <p class="muted" style="margin-top:0">片手をカメラに映してください。右に出すと右、上げると機首の方向へ一歩動きます。手を止めると止まります。手振りモードの機体だけが動きます。</p>
+    <button type="button" id="gesture-cam">カメラをオン</button>
+    <div id="gesture-view" hidden>
+      <video id="gesture-video" playsinline muted></video>
+      <p id="gesture-status" class="muted"></p>
+    </div>
+  </section>
+
   <!-- before the battle: choose a mode or a file, then get ready -->
   <section class="card" id="setup">
     <div class="picker-head">
@@ -113,4 +123,5 @@
   <a class="button ghost" href="{{ url_for('peers_page') }}">← マッチングに戻る</a>
   <span></span>
 </div>
+<script src="{{ url_for('static', filename='gesture.js') }}"></script>
 {% endblock %}
