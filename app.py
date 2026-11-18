@@ -7,6 +7,7 @@ same moment and decides the winner: the drone still in the air at the end.
 """
 
 import atexit
+import mimetypes
 import os
 import re
 import threading
@@ -17,10 +18,14 @@ from flask import Flask, Response, abort, jsonify, render_template, request
 
 import battle
 import freefly
+import gesture_fly
 import scan
 import arena
 import plans
 import tello_net
+
+mimetypes.add_type("application/javascript", ".mjs")
+mimetypes.add_type("application/wasm", ".wasm")
 
 
 app = Flask(__name__)
@@ -78,6 +83,8 @@ runner2.opponent_raw = lambda: (runner.public().get("pos"), 0.0)
 atexit.register(runner.shutdown)
 atexit.register(runner2.shutdown)
 atexit.register(flyer.shutdown)
+practice = gesture_fly.GestureFlight(runner.tello_port)
+atexit.register(practice.shutdown)
 lock = threading.Lock()
 
 
@@ -199,6 +206,8 @@ def drone_busy() -> str | None:
         return "バトル中です"
     if scanner.active:
         return "フィールドのスキャン中です"
+    if practice.phase in ("starting", "flying"):
+        return "手振りの練習中です"
     return None
 
 
@@ -335,6 +344,7 @@ def api_state():
         missing=missing_setup(),
         player=tello_net.load_settings().get("player", ""),
         my_drone=my_drone(),
+        gesture_fly=practice.public(),
         **snapshot,
     )
 
@@ -670,6 +680,46 @@ def api_mode():
     return jsonify(ok=target.set_mode(kind, name))
 
 
+@app.post("/api/gesture")
+def api_gesture():
+    """The latest lean from this PC's camera. Only a drone on the gesture mode hears it."""
+    body = request.get_json(silent=True) or {}
+    try:
+        right, forward = int(body.get("right", 0)), int(body.get("forward", 0))
+    except (TypeError, ValueError):
+        return jsonify(ok=False, message="向きがわかりません")
+    if right not in (-1, 0, 1) or forward not in (-1, 0, 1):
+        return jsonify(ok=False, message="向きがわかりません")
+    for who in (runner, runner2):
+        if who.phase in ("starting", "flying") and battle.uses_gesture(who.plan):
+            who.set_lean(right, forward)
+    if practice.phase in ("starting", "flying"):
+        practice.set_lean(right, forward)
+    return jsonify(ok=True)
+
+
+@app.post("/api/gesture-fly")
+def api_gesture_fly():
+    """Take off the player's drone and step where they lean. No match, no second drone."""
+    body = request.get_json(silent=True) or {}
+    if body.get("action") == "land":
+        practice.land()
+        return jsonify(ok=True)
+    if flyer.busy():
+        return jsonify(ok=False, message="手動で操縦中です。着陸してから試してください")
+    if runner.phase in ("starting", "flying") or runner2.phase in ("starting", "flying"):
+        return jsonify(ok=False, message="バトル中は試せません")
+    if scanner.active:
+        return jsonify(ok=False, message="フィールドのスキャン中です")
+    drone = my_drone()
+    if not drone or not drone.get("ip"):
+        return jsonify(ok=False, message="先に「自分の機体にする」を押してください")
+    message = practice.start(drone["ip"], drone.get("battery"))
+    if message:
+        return jsonify(ok=False, message=message)
+    return jsonify(ok=True)
+
+
 @app.post("/api/surrender")
 def api_surrender():
     runner.land("降参して着陸")
@@ -693,7 +743,7 @@ def api_reset():
     Drone nicknames, the player name and imported files stay. Nothing is reset
     while the drone is in the air.
     """
-    if runner.phase in ("starting", "flying") or runner2.phase in ("starting", "flying"):
+    if runner.phase in ("starting", "flying") or runner2.phase in ("starting", "flying") or practice.phase in ("starting", "flying"):
         return jsonify(ok=False, message="飛んでいる間はリセットしません")
     runner.reset()
     runner2.reset()
