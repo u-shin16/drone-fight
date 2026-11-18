@@ -61,11 +61,79 @@ const Gesture = (() => {
     return { ...prev, seen: true, ready: true };
   }
 
+  // ---- face mode: eyes shut = stop, mouth open = forward, smile = back, head turned = right/left ----
+  let mode = "hand";        // "hand" or "face"
+  let faceBase = null;      // the player's own straight face, taken first
+  let faceSamples = [];
+  const FACE_WAYS = {
+    shut: { right: 0, forward: 0, text: "目を閉じている：止まる" },
+    open: { right: 0, forward: 1, text: "口を開けている：前" },
+    smile: { right: 0, forward: -1, text: "笑っている：後ろ" },
+    right: { right: 1, forward: 0, text: "顔が右：右" },
+    left: { right: -1, forward: 0, text: "顔が左：左" },
+    still: { right: 0, forward: 0, text: "真顔：止まる" },
+  };
+
+  function faceOf(found) {
+    const lm = found.faceLandmarks && found.faceLandmarks[0];
+    const shapes = found.faceBlendshapes && found.faceBlendshapes[0];
+    if (!lm || !shapes) return null;
+    const score = {};
+    for (const c of shapes.categories) score[c.categoryName] = c.score;
+    const left = lm[234], right = lm[454], nose = lm[1];
+    const width = right.x - left.x;
+    if (Math.abs(width) < 0.02) return null;
+    return {
+      blink: Math.min(score.eyeBlinkLeft || 0, score.eyeBlinkRight || 0),
+      jaw: score.jawOpen || 0,
+      smile: ((score.mouthSmileLeft || 0) + (score.mouthSmileRight || 0)) / 2,
+      // 0.5 = facing the camera. The camera faces the player: turning to their right moves the nose to the image's left.
+      turn: (nose.x - left.x) / width,
+    };
+  }
+
+  function faceKey(f) {
+    if (f.blink > 0.5) return "shut";  // first: shut eyes always stop
+    const b = faceBase;
+    if (f.jaw - b.jaw > 0.35) return "open";
+    if (f.smile - b.smile > 0.4) return "smile";
+    if (f.turn - b.turn < -0.12) return "right";
+    if (f.turn - b.turn > 0.12) return "left";
+    return "still";
+  }
+
+  function classifyFace(f) {
+    if (!f) {
+      streak = { key: null, count: 0 };
+      prev = { right: 0, forward: 0, text: "" };
+      return { right: 0, forward: 0, seen: false, ready: !!faceBase, text: "" };
+    }
+    if (!faceBase) {
+      faceSamples.push(f);
+      if (faceSamples.length >= 20) {  // about 2 s of a straight face
+        const avg = (k) => faceSamples.reduce((sum, x) => sum + x[k], 0) / faceSamples.length;
+        faceBase = { jaw: avg("jaw"), smile: avg("smile"), turn: avg("turn") };
+        faceSamples = [];
+      }
+      return { right: 0, forward: 0, seen: true, ready: false, text: "" };
+    }
+    const key = faceKey(f);
+    streak = streak.key === key ? { key, count: streak.count + 1 } : { key, count: 1 };
+    // Shut eyes stop at once; the other faces must be held for a moment.
+    if (key === "shut" || streak.count >= HOLD) {
+      const way = FACE_WAYS[key];
+      prev = { right: way.right, forward: way.forward, text: way.text };
+    }
+    return { ...prev, seen: true, ready: true };
+  }
+
   function showStatus(lean) {
     const el = statusEl();
     if (!el) return;
     let text;
-    if (!lean.seen) text = "片手をカメラに映してください（人差し指=前・親指=右・中指=左・小指=後ろ・グー=止まる）";
+    if (!lean.seen) text = mode === "face" ? "顔をカメラに映してください"
+      : "片手をカメラに映してください（人差し指=前・親指=右・中指=左・小指=後ろ・グー=止まる）";
+    else if (!lean.ready) text = "真顔でカメラを見て、2秒ほど止まってください（基準にします）";
     else text = lean.text || "指を1本だけ出してください";
     if (live && lean.seen) {
       text += lean.right || lean.forward ? "。この方向へ一歩ずつ動きます" : "";
@@ -97,12 +165,12 @@ const Gesture = (() => {
     const t = performance.now();
     if (landmarker && cam && cam.readyState >= 2 && t - lastDetect >= 100) {
       lastDetect = t;
-      let landmarks = null;
+      let found = null;
       try {
-        const found = landmarker.detectForVideo(cam, nowStamp());
-        landmarks = found.landmarks && found.landmarks[0];
+        found = landmarker.detectForVideo(cam, nowStamp());
       } catch (e) { /* a dropped frame is just a miss */ }
-      const lean = classify(fingersOf(landmarks));
+      const lean = mode === "face" ? classifyFace(found ? faceOf(found) : null)
+        : classify(fingersOf(found && found.landmarks && found.landmarks[0]));
       showStatus(lean);
       send(lean);
     }
@@ -110,20 +178,27 @@ const Gesture = (() => {
     else if (running) setTimeout(tick, 120);
   }
 
+  const landmarkers = {};
+  let loadingMode = null;
+
   async function ensureModel() {
-    if (landmarker) return;
-    if (!loading) {
+    if (landmarkers[mode]) { landmarker = landmarkers[mode]; return; }
+    if (!loading || loadingMode !== mode) {
+      const want = mode;
+      loadingMode = want;
       loading = (async () => {
         const vision = await import("/static/vendor/pose/vision_bundle.mjs");
         const files = await vision.FilesetResolver.forVisionTasks("/static/vendor/pose/wasm");
-        landmarker = await vision.HandLandmarker.createFromOptions(files, {
-          baseOptions: {
-            modelAssetPath: "/static/vendor/pose/hand_landmarker.task",
-            delegate: "CPU",
-          },
-          runningMode: "VIDEO",
-          numHands: 1,
-        });
+        landmarkers[want] = want === "face"
+          ? await vision.FaceLandmarker.createFromOptions(files, {
+            baseOptions: { modelAssetPath: "/static/vendor/pose/face_landmarker.task", delegate: "CPU" },
+            runningMode: "VIDEO", numFaces: 1, outputFaceBlendshapes: true,
+          })
+          : await vision.HandLandmarker.createFromOptions(files, {
+            baseOptions: { modelAssetPath: "/static/vendor/pose/hand_landmarker.task", delegate: "CPU" },
+            runningMode: "VIDEO", numHands: 1,
+          });
+        landmarker = landmarkers[want];
       })();
     }
     try {
@@ -151,6 +226,8 @@ const Gesture = (() => {
     }
     streak = { key: null, count: 0 };
     prev = { right: 0, forward: 0, text: "" };
+    faceBase = null;
+    faceSamples = [];
     if (live && (lastSent.right || lastSent.forward) && typeof post === "function") {
       lastSent = { right: 0, forward: 0 };
       post("/api/gesture", { right: 0, forward: 0 });
@@ -217,6 +294,20 @@ const Gesture = (() => {
     if (!card) return;
     card.hidden = !shown;
     if (!shown) stop();
+  }
+
+  function setMode(next) {
+    if (next === mode) return;
+    const wasOn = running || starting;
+    stop();
+    mode = next;
+    landmarker = landmarkers[mode] || null;
+    for (const b of document.querySelectorAll("[data-gesture-mode]")) b.classList.toggle("on", b.dataset.gestureMode === mode);
+    for (const el of document.querySelectorAll("[data-gesture-help]")) el.hidden = el.dataset.gestureHelp !== mode;
+    if (wasOn) start();
+  }
+  for (const b of document.querySelectorAll("[data-gesture-mode]")) {
+    b.addEventListener("click", () => setMode(b.dataset.gestureMode));
   }
 
   const button = camButton();

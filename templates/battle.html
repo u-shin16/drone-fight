@@ -50,7 +50,9 @@
 
   <section class="card" id="gesture-card" hidden>
     <h2>手振りで動かす</h2>
-    <p class="muted" style="margin-top:0">片手をカメラに映して、指を1本だけ出します。<b>人差し指＝前、親指＝右、中指＝左、小指＝後ろ</b>、グー（または指2本以上）で止まります。前は機首の方向です。手振りモードの機体だけが動きます。</p>
+    <div class="segment" role="tablist" aria-label="操作のしかた" style="margin-bottom:8px"><button type="button" role="tab" data-gesture-mode="hand" class="on">指で操作</button><button type="button" role="tab" data-gesture-mode="face">表情で操作</button></div>
+    <p class="muted" style="margin-top:0" data-gesture-help="hand">片手をカメラに映して、指を1本だけ出します。<b>人差し指＝前、親指＝右、中指＝左、小指＝後ろ</b>、グー（または指2本以上）で止まります。前は機首の方向です。手振りモードの機体だけが動きます。</p>
+    <p class="muted" style="margin-top:0" data-gesture-help="face" hidden>顔をカメラに映します。最初に真顔で2秒ほど止まると、それを基準にします。<b>口を大きく開ける＝前、笑う＝後ろ、顔を右に向ける＝右、左に向ける＝左、目を閉じる＝止まる</b>（真顔でも止まります）。</p>
     <button type="button" id="gesture-cam">カメラをオン</button>
     <div id="gesture-view" hidden>
       <video id="gesture-video" playsinline muted></video>
