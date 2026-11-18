@@ -1,9 +1,5 @@
-/* Move the drone with one hand: the laptop camera watches the wrist. */
+/* Move the drone with one hand: the laptop camera sees which finger is held out. */
 const Gesture = (() => {
-  const ON = 1.0;   // palm-widths from where the hand was held still
-  const OFF = 0.55;
-  const WRIST = 0;
-  const MIDDLE = 9;
 
   let shown = false;
   let live = false;
@@ -13,9 +9,7 @@ const Gesture = (() => {
   let stream = null;
   let landmarker = null;
   let loading = null;
-  let base = null;
-  let samples = [];
-  let prev = { right: 0, forward: 0 };
+  let prev = { right: 0, forward: 0, text: "" };
   let lastSent = { right: 0, forward: 0 };
   let lastSentAt = 0;
   let lastDetect = 0;
@@ -25,69 +19,58 @@ const Gesture = (() => {
   const statusEl = () => document.getElementById("gesture-status");
   const camButton = () => document.getElementById("gesture-cam");
 
-  function axis(value, previous) {
-    if (value > (previous === 1 ? OFF : ON)) return 1;
-    if (value < (previous === -1 ? -OFF : -ON)) return -1;
-    return 0;
+  // Which single finger is held out picks the way:
+  //   index = forward, thumb = right, middle = left, pinky = back. A fist, an open
+  //   hand or two fingers at once = stay still. Ring finger is ignored (it lifts with its neighbours).
+  const HOLD = 3;  // the same reading this many times in a row (about 0.3 s) before it counts
+  const WAYS = {
+    index: { right: 0, forward: 1, text: "人差し指：前" },
+    thumb: { right: 1, forward: 0, text: "親指：右" },
+    middle: { right: -1, forward: 0, text: "中指：左" },
+    pinky: { right: 0, forward: -1, text: "小指：後ろ" },
+  };
+  let streak = { key: null, count: 0 };
+
+  function dist(a, b) {
+    return Math.hypot(a.x - b.x, a.y - b.y);
   }
 
-  function average(key) {
-    return samples.reduce((sum, sample) => sum + sample[key], 0) / samples.length;
+  function fingersOf(lm) {
+    if (!lm || lm.length < 21) return null;
+    const wrist = lm[0];
+    const up = (tip, pip) => dist(lm[tip], wrist) > dist(lm[pip], wrist) * 1.12;
+    // The thumb is out when its tip is well away from the base of the little finger.
+    const thumb = dist(lm[4], lm[17]) > dist(lm[2], lm[17]) * 1.25 && dist(lm[4], lm[5]) > dist(lm[0], lm[5]) * 0.45;
+    return { thumb, index: up(8, 6), middle: up(12, 10), pinky: up(20, 18) };
   }
 
-  function handOf(landmarks) {
-    if (!landmarks || landmarks.length < 10) return null;
-    const wrist = landmarks[WRIST];
-    const middle = landmarks[MIDDLE];
-    if (!wrist || !middle) return null;
-    const size = Math.hypot(middle.x - wrist.x, middle.y - wrist.y);
-    if (size < 0.02) return null;
-    return { x: wrist.x, y: wrist.y, size };
-  }
-
-  function classify(sample) {
-    if (!sample) {
-      prev = { right: 0, forward: 0 };
-      return { right: 0, forward: 0, seen: false, ready: !!base };
+  function classify(fingers) {
+    if (!fingers) {
+      streak = { key: null, count: 0 };
+      prev = { right: 0, forward: 0, text: "" };
+      return { right: 0, forward: 0, seen: false, ready: true, text: "" };
     }
-    if (!base) {
-      samples.push(sample);
-      if (samples.length >= 12) {
-        const spread = (key) => Math.max(...samples.map((s) => s[key])) - Math.min(...samples.map((s) => s[key]));
-        if (spread("x") > 0.03 || spread("y") > 0.03) samples = samples.slice(-4);
-        else {
-          base = { x: average("x"), y: average("y"), size: average("size") };
-          samples = [];
-        }
-      }
-      return { right: 0, forward: 0, seen: true, ready: false };
+    const out = Object.keys(WAYS).filter((k) => fingers[k]);
+    const key = out.length === 1 ? out[0] : "stop";
+    streak = streak.key === key ? { key, count: streak.count + 1 } : { key, count: 1 };
+    if (streak.count >= HOLD) {
+      const way = WAYS[key];
+      prev = way ? { right: way.right, forward: way.forward, text: way.text }
+        : { right: 0, forward: 0, text: out.length ? "指が2本以上：止まる" : "グー：止まる" };
     }
-    // The camera faces the player, so their right is the left side of the image.
-    // A hand raised in the picture is "forward".
-    const dRight = (base.x - sample.x) / base.size;
-    const dForward = (base.y - sample.y) / base.size;
-    const right = axis(dRight, prev.right);
-    const forward = axis(dForward, prev.forward);
-    prev = { right, forward };
-    return { right, forward, seen: true, ready: true };
-  }
-
-  function leanText(right, forward) {
-    const way = (forward > 0 ? "上" : forward < 0 ? "下" : "") + (right > 0 ? "右" : right < 0 ? "左" : "");
-    return way ? "手を" + way + "に出しています" : "手が止まっています";
+    return { ...prev, seen: true, ready: true };
   }
 
   function showStatus(lean) {
     const el = statusEl();
     if (!el) return;
     let text;
-    if (!lean.seen) text = "片手をカメラに映してください";
-    else if (!lean.ready) text = "手を前に出して、少し止まってください";
-    else text = leanText(lean.right, lean.forward);
-    if (live && lean.ready && lean.seen) {
-      text += lean.right || lean.forward ? "。この方向へ一歩ずつ動きます" : "。止まっています";
-    } else if (!live && lean.ready) {
-      text += "。離陸すると、この手の位置で動きます";
+    if (!lean.seen) text = "片手をカメラに映してください（人差し指=前・親指=右・中指=左・小指=後ろ・グー=止まる）";
+    else text = lean.text || "指を1本だけ出してください";
+    if (live && lean.seen) {
+      text += lean.right || lean.forward ? "。この方向へ一歩ずつ動きます" : "";
+    } else if (!live && lean.seen && (lean.right || lean.forward)) {
+      text += "。離陸すると、この方向へ動きます";
     }
     el.textContent = text;
   }
@@ -119,7 +102,7 @@ const Gesture = (() => {
         const found = landmarker.detectForVideo(cam, nowStamp());
         landmarks = found.landmarks && found.landmarks[0];
       } catch (e) { /* a dropped frame is just a miss */ }
-      const lean = classify(handOf(landmarks));
+      const lean = classify(fingersOf(landmarks));
       showStatus(lean);
       send(lean);
     }
@@ -166,9 +149,8 @@ const Gesture = (() => {
       button.disabled = false;
       button.textContent = "カメラをオン";
     }
-    base = null;
-    samples = [];
-    prev = { right: 0, forward: 0 };
+    streak = { key: null, count: 0 };
+    prev = { right: 0, forward: 0, text: "" };
     if (live && (lastSent.right || lastSent.forward) && typeof post === "function") {
       lastSent = { right: 0, forward: 0 };
       post("/api/gesture", { right: 0, forward: 0 });
@@ -214,9 +196,8 @@ const Gesture = (() => {
     cam.srcObject = stream;
     const played = cam.play();
     if (played && played.catch) played.catch(() => {});
-    base = null;
-    samples = [];
-    prev = { right: 0, forward: 0 };
+    streak = { key: null, count: 0 };
+    prev = { right: 0, forward: 0, text: "" };
     lastDetect = 0;
     running = true;
     starting = false;
