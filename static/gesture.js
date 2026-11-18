@@ -19,15 +19,16 @@ const Gesture = (() => {
   const statusEl = () => document.getElementById("gesture-status");
   const camButton = () => document.getElementById("gesture-cam");
 
-  // Which single finger is held out picks the way:
-  //   index = forward, thumb = right, middle = left, pinky = back. A fist, an open
-  //   hand or two fingers at once = stay still. Ring finger is ignored (it lifts with its neighbours).
-  const HOLD = 3;  // the same reading this many times in a row (about 0.3 s) before it counts
+  // How many fingers are up picks the way (count them like 1, 2, 3, 4, 5):
+  //   1 = forward, 2 = back, 3 = right, 4 = left, 5 (open palm) = stop. A fist (0) = stop too.
+  const HOLD = 3;  // the same count this many times in a row (about 0.3 s) before it counts
   const WAYS = {
-    index: { right: 0, forward: 1, text: "人差し指：前" },
-    thumb: { right: 1, forward: 0, text: "親指：右" },
-    middle: { right: -1, forward: 0, text: "中指：左" },
-    pinky: { right: 0, forward: -1, text: "小指：後ろ" },
+    1: { right: 0, forward: 1, text: "1本：前" },
+    2: { right: 0, forward: -1, text: "2本：後ろ" },
+    3: { right: 1, forward: 0, text: "3本：右" },
+    4: { right: -1, forward: 0, text: "4本：左" },
+    5: { right: 0, forward: 0, text: "5本（パー）：止まる" },
+    0: { right: 0, forward: 0, text: "グー：止まる" },
   };
   let streak = { key: null, count: 0 };
 
@@ -41,7 +42,7 @@ const Gesture = (() => {
     const up = (tip, pip) => dist(lm[tip], wrist) > dist(lm[pip], wrist) * 1.12;
     // The thumb is out when its tip is well away from the base of the little finger.
     const thumb = dist(lm[4], lm[17]) > dist(lm[2], lm[17]) * 1.25 && dist(lm[4], lm[5]) > dist(lm[0], lm[5]) * 0.45;
-    return { thumb, index: up(8, 6), middle: up(12, 10), pinky: up(20, 18) };
+    return { thumb, index: up(8, 6), middle: up(12, 10), ring: up(16, 14), pinky: up(20, 18) };
   }
 
   function classify(fingers) {
@@ -50,13 +51,12 @@ const Gesture = (() => {
       prev = { right: 0, forward: 0, text: "" };
       return { right: 0, forward: 0, seen: false, ready: true, text: "" };
     }
-    const out = Object.keys(WAYS).filter((k) => fingers[k]);
-    const key = out.length === 1 ? out[0] : "stop";
+    const key = ["thumb", "index", "middle", "ring", "pinky"].filter((k) => fingers[k]).length;
     streak = streak.key === key ? { key, count: streak.count + 1 } : { key, count: 1 };
-    if (streak.count >= HOLD) {
+    // Stopping (fist or open palm) works at once; a move must be held for a moment.
+    if (key === 0 || key === 5 || streak.count >= HOLD) {
       const way = WAYS[key];
-      prev = way ? { right: way.right, forward: way.forward, text: way.text }
-        : { right: 0, forward: 0, text: out.length ? "指が2本以上：止まる" : "グー：止まる" };
+      prev = { right: way.right, forward: way.forward, text: way.text };
     }
     return { ...prev, seen: true, ready: true };
   }
@@ -132,7 +132,7 @@ const Gesture = (() => {
     if (!el) return;
     let text;
     if (!lean.seen) text = mode === "face" ? "顔をカメラに映してください"
-      : "片手をカメラに映してください（人差し指=前・親指=右・中指=左・小指=後ろ・グー=止まる）";
+      : "片手をカメラに映してください（指1本=前・2本=後ろ・3本=右・4本=左・パーかグー=止まる）";
     else if (!lean.ready) text = "真顔でカメラを見て、2秒ほど止まってください（基準にします）";
     else text = lean.text || "指を1本だけ出してください";
     if (live && lean.seen) {
